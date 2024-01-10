@@ -82,7 +82,7 @@ main :: proc()
 
         view := View{
             scene  = &scene,
-            camera = setup_from_camera(camera),
+            camera = compute_cached_camera(camera),
         }
 
         moving_sphere.p.y = 25.0 + 7.5*math.sin(5.0*time)

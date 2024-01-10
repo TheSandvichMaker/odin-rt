@@ -39,14 +39,16 @@ srgb_from_linear :: proc(lin: Vector3) -> Vector3
     }
 }
 
-rgba8_from_srgb :: proc(srgb: Vector3) -> Color_RGBA
+rgba8_from_color :: proc(in_color: Vector3, to_srgb := true) -> Color_RGBA
 {
     result: Color_RGBA 
 
+    color := to_srgb ? srgb_from_linear(in_color) : in_color;
+
     using result
-    r = u8(255.0*srgb.x)
-    g = u8(255.0*srgb.y)
-    b = u8(255.0*srgb.z)
+    r = u8(255.0*color.x)
+    g = u8(255.0*color.y)
+    b = u8(255.0*color.z)
     a = 255
 
     return result
@@ -60,7 +62,7 @@ Camera :: struct
     aspect    : f32, // width over height
 }
 
-Camera_Setup  :: struct
+Cached_Camera  :: struct
 {
     x: Vector3,
     y: Vector3,
@@ -70,13 +72,13 @@ Camera_Setup  :: struct
 }
 
 @(require_results)
-setup_from_camera :: proc "contextless" (camera: Camera) -> Camera_Setup 
+compute_cached_camera :: proc "contextless" (camera: Camera) -> Cached_Camera 
 {
     WORLD_UP :: Vector3{ 0, 1, 0 }
 
-    setup: Camera_Setup
+    cached: Cached_Camera
     {
-        using setup
+        using cached
 
         x = normalize(cross(WORLD_UP, camera.direction))
         y = normalize(cross(camera.direction, x))
@@ -86,11 +88,11 @@ setup_from_camera :: proc "contextless" (camera: Camera) -> Camera_Setup
         film_distance = 1.0 / math.tan(math.to_radians(0.5*camera.fov))
     }
 
-    return setup
+    return cached
 }
 
 @(require_results)
-ray_from_camera_setup :: proc "contextless" (camera: Camera_Setup, ndc: Vector2) -> (ro: Vector3, rd: Vector3)
+ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_min, t_max: f32) -> Ray
 {
     x := camera.x
     y := camera.y
@@ -100,7 +102,14 @@ ray_from_camera_setup :: proc "contextless" (camera: Camera_Setup, ndc: Vector2)
 
     d := normalize(ndc.x*x + ndc.y*y - film_distance*z)
 
-    return o, d
+    ray := Ray{
+        ro    = o,
+        rd    = d,
+        t_min = t_min,
+        t_max = t_max,
+    }
+
+    return ray
 }
 
 Ray :: struct
@@ -122,7 +131,7 @@ Render_Target :: struct
 View :: struct
 {
     scene: ^Scene,
-    camera: Camera_Setup,
+    camera: Cached_Camera,
 }
 
 render_frame :: proc(view: ^View, render_target: ^Render_Target)
@@ -210,19 +219,8 @@ render_pixel :: proc(view: ^View, ndc: Vector2) -> Color_RGBA
     camera := view.camera
     scene  := view.scene
 
-    ro, rd := ray_from_camera_setup(camera, ndc)
-
-    ray := Ray{
-        ro    = ro,
-        rd    = rd,
-        t_min = 0.001,
-        t_max = math.F32_MAX,
-    }
-
+    ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
     color := shade_ray(scene, ray)
 
-    srgb  := srgb_from_linear(color)
-    rgba8 := rgba8_from_srgb(srgb)
-
-    return rgba8
+    return rgba8_from_color(color)
 }
