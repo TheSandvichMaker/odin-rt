@@ -17,10 +17,8 @@ Sphere :: struct
     material : Material_Index,
 }
 
-intersect_sphere :: proc(sphere: ^Sphere, ray: Ray) -> (hit: bool, t: f32)
+intersect_sphere :: proc(sphere: ^Sphere, using ray: Ray) -> (hit: bool, t: f32)
 {
-    using ray
-
     EPSILON :: 0.00001
 
     hit = false

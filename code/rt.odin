@@ -170,11 +170,14 @@ schlick_fresnel :: proc(cos_theta: f32) -> f32
     return result
 }
 
-shade_ray :: proc(scene: ^Scene, ray: Ray) -> Vector3
+shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 {
-    using ray
-
     color := Vector3{0.3, 0.5, 0.9}
+
+    if (recursion == 0)
+    {
+        return color
+    }
 
     sun := scene.sun
 
@@ -192,13 +195,25 @@ shade_ray :: proc(scene: ^Scene, ray: Ray) -> Vector3
 
         if n_dot_l > 0.0
         {
-            color = material.albedo*sun.color*n_dot_l
+            shadow_ray := Ray{
+                ro    = p + 0.0001*n,
+                rd    = sun.d,
+                t_min = t_min,
+                t_max = t_max,
+            }
+
+            in_shadow := intersect_scene_shadow(scene, shadow_ray)
+
+            if !in_shadow
+            {
+                color = material.albedo*sun.color*n_dot_l
+            }
         }
 
         if material.reflectiveness > 0.0
         {
             next_ray := Ray{
-                ro    = p,
+                ro    = p + 0.0001*n,
                 rd    = reflect(rd, n),
                 t_min = t_min,
                 t_max = t_max,
@@ -206,7 +221,7 @@ shade_ray :: proc(scene: ^Scene, ray: Ray) -> Vector3
 
             cos_theta := -dot(rd, n)
             fresnel   := schlick_fresnel(cos_theta)
-            color += material.reflectiveness*fresnel*shade_ray(scene, next_ray)
+            color += material.reflectiveness*fresnel*shade_ray(scene, next_ray, recursion - 1)
         }
     }
 

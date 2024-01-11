@@ -29,7 +29,7 @@ main :: proc()
     moving_sphere: ^Sphere
 
     {
-        material := add_material(&scene, { albedo = { 1.0, 0.5, 0.2 } })
+        material := add_material(&scene, { albedo = { 1.0, 0.5, 0.2 }, reflectiveness = 0.25 })
         add_sphere(&scene, { p = { 0.0, -1000.0, 0.0 }, r = 1000.0, material = material })
     }
 

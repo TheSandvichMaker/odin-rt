@@ -35,7 +35,7 @@ add_sphere :: proc(scene: ^Scene, sphere: Sphere) -> ^Sphere
 }
 
 @(require_results)
-intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Sphere, f32)
+intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Sphere, f32)
 {
     result: ^Sphere
 
@@ -48,8 +48,26 @@ intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Sphere, f32)
         {
             result = &sphere
             t      = hit_t
+
+            when early_out
+            {
+                return result, t
+            }
         }
     }
 
     return result, t
+}
+
+@(require_results)
+intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Sphere, f32)
+{
+    return intersect_scene_impl(scene, ray, false)
+}
+
+@(require_results)
+intersect_scene_shadow :: proc(scene: ^Scene, ray: Ray) -> bool
+{
+    sphere, t := intersect_scene_impl(scene, ray, true)
+    return sphere != nil
 }
