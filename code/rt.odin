@@ -181,17 +181,17 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 
     sun := scene.sun
 
-    sphere, t := intersect_scene(scene, ray)
-    if sphere != nil
+    primitive, t := intersect_scene(scene, ray)
+    if primitive != nil
     {
         color = Vector3{0.0, 0.0, 0.0}
 
         p := ro + t*rd
-        n := normal_from_hit(sphere, p)
+        n: Vector3 = normal_from_hit(primitive, p)
 
         n_dot_l := math.max(0.0, dot(sun.d, n))
 
-        material := get_material(scene, sphere.material)
+        material := get_material(scene, primitive.material)
 
         if n_dot_l > 0.0
         {

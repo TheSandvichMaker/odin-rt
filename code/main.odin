@@ -26,13 +26,12 @@ main :: proc()
     sun.d     = normalize(Vector3{0.2, 0.8, 0.3})
     sun.color = Vector3{1.0, 1.0, 1.0}
 
-    moving_sphere: ^Sphere
-
     {
         material := add_material(&scene, { albedo = { 1.0, 0.5, 0.2 }, reflectiveness = 0.25 })
-        add_sphere(&scene, { p = { 0.0, -1000.0, 0.0 }, r = 1000.0, material = material })
+        add_plane(&scene, { p = { 0.0, 0.0, 0.0 }, n = { 0.0, 1.0, 0.0 }, material = material })
     }
 
+    moving_sphere: ^Sphere
     {
         material := add_material(&scene, { albedo = { 0.0, 0.5, 1.0 }, reflectiveness = 1.0 })
         moving_sphere = add_sphere(&scene, { p = { 0.0, 15.0, 0.0 }, r = 15.0, material = material })
