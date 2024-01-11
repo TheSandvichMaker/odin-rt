@@ -73,7 +73,6 @@ main :: proc()
 
         camera := Camera{
             origin    = { 0.0, 10.0, -50.0 },
-            // direction = { math.sin(25.0*time), 0.0, math.cos(25.0*time) },
             direction = {0.0, 0.0, 1.0 },
             fov       = 85.0,
             aspect    = f32(w) / f32(h),

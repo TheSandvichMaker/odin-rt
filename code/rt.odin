@@ -237,5 +237,19 @@ render_pixel :: proc(view: ^View, ndc: Vector2) -> Color_RGBA
     ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
     color := shade_ray(scene, ray)
 
+    color = apply_tonemap(color)
+
     return rgba8_from_color(color)
+}
+
+@(require_results)
+apply_tonemap :: proc(color: Vector3) -> Vector3
+{
+    result := Vector3{
+        1.0 - math.exp(-color.x),
+        1.0 - math.exp(-color.y),
+        1.0 - math.exp(-color.z),
+    }
+
+    return result
 }
