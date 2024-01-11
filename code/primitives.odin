@@ -4,8 +4,8 @@ import "core:math"
 
 Material :: struct
 {
-    albedo: Vector3,
-    reflectiveness: f32,
+    albedo         : Vector3,
+    reflectiveness : f32,
 }
 
 Material_Index :: distinct u32

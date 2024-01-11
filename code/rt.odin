@@ -172,12 +172,12 @@ schlick_fresnel :: proc(cos_theta: f32) -> f32
 
 shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 {
-    color := Vector3{0.3, 0.5, 0.9}
-
     if (recursion == 0)
     {
-        return color
+        return Vector3{0.0, 0.0, 0.0}
     }
+
+    color := Vector3{0.3, 0.5, 0.9}
 
     sun := scene.sun
 
