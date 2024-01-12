@@ -1,4 +1,0 @@
-I have multiple "work units" in flight on different threads, associated with some incremental index. Specifically, these are rendered frames.
-So I might have `frame N`, and `frame N + 1`.
-
-I want to display frames sequentially, so it is acceptable to skip `frame N` if 
