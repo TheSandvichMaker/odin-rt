@@ -94,12 +94,12 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 @(require_results)
 intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
 {
-    return intersect_scene_impl(scene, ray, false)
+    return #force_inline intersect_scene_impl(scene, ray, false)
 }
 
 @(require_results)
 intersect_scene_shadow :: proc(scene: ^Scene, ray: Ray) -> bool
 {
-    primitive, t := intersect_scene_impl(scene, ray, true)
+    primitive, t := #force_inline intersect_scene_impl(scene, ray, true)
     return primitive != nil
 }
