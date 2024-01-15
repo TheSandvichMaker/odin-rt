@@ -11,7 +11,7 @@ echo ==========================
 echo ===   BUILDING DEBUG   ===
 echo ==========================
 
-odin build code -debug -show-timings -microarch:native -o:minimal -out:"build\odin-rt_debug.exe"
+odin build code -debug -show-timings -microarch:native -o:minimal -use-separate-modules -out:"build\odin-rt_debug.exe"
 if %ERRORLEVEL% NEQ 0 goto end
 
 copy build\odin-rt_debug.exe run\odin-rt_debug.exe
@@ -22,7 +22,7 @@ echo ==========================
 echo ===  BUILDING RELEASE  ===
 echo ==========================
 
-odin build code -debug -show-timings -microarch:native -o:aggressive -no-bounds-check -out:"build\odin-rt.exe"
+odin build code -debug -show-timings -microarch:native -o:aggressive -no-bounds-check -use-separate-modules -out:"build\odin-rt.exe"
 
 copy build\odin-rt.exe run\odin-rt.exe
 copy build\odin-rt.pdb run\odin-rt.pdb

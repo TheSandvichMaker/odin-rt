@@ -14,13 +14,25 @@ main :: proc()
     window_w := 720
     window_h := 480
 
-    window     := sdl.CreateWindow  ("odin-rt", c.int(window_x), c.int(window_y), c.int(window_w), c.int(window_h), sdl.WindowFlags{})
-    renderer   := sdl.CreateRenderer(window, -1, sdl.RendererFlags{.ACCELERATED, .PRESENTVSYNC})
+    sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "1")
+
+    window := sdl.CreateWindow("odin-rt", 
+                               c.int(window_x), 
+                               c.int(window_y), 
+                               c.int(window_w), 
+                               c.int(window_h), 
+                               sdl.WindowFlags{})
+
+    renderer := sdl.CreateRenderer(window, -1, sdl.RendererFlags{.ACCELERATED, .PRESENTVSYNC})
 
     preview_w := 480
     preview_h := 320
 
-    backbuffer := sdl.CreateTexture (renderer, cast(u32)sdl.PixelFormatEnum.RGBA8888, sdl.TextureAccess.STREAMING, c.int(preview_w), c.int(preview_h))
+    backbuffer := sdl.CreateTexture(renderer, 
+                                    cast(u32)sdl.PixelFormatEnum.RGBA8888, 
+                                    sdl.TextureAccess.STREAMING, 
+                                    c.int(preview_w), 
+                                    c.int(preview_h))
 
     //
     // scene setup
@@ -92,7 +104,7 @@ main :: proc()
 
         camera := Camera{
             origin    = { 0.0, 10.0, -50.0 },
-            direction = {0.0, 0.0, 1.0 },
+            direction = { 0.0, 0.0, 1.0 },
             fov       = 85.0,
             aspect    = f32(preview_w) / f32(preview_h),
         }
