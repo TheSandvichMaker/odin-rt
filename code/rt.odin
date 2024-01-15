@@ -3,57 +3,6 @@ package rt
 import "core:math"
 import "core:math/linalg"
 
-Vector2 :: [2]f32
-Vector3 :: [3]f32
-Vector4 :: [4]f32
-
-dot       :: linalg.dot
-cross     :: linalg.cross
-normalize :: linalg.normalize
-reflect   :: linalg.reflect
-
-Color_RGBA :: struct
-{
-    a: u8,
-    b: u8,
-    g: u8,
-    r: u8,
-}
-
-color_rgb :: proc(r, g, b: u8) -> Color_RGBA
-{
-    return { 255, b, g, r }
-}
-
-color_rgba :: proc(r, g, b, a: u8) -> Color_RGBA
-{
-    return { a, b, g, r }
-}
-
-srgb_from_linear :: proc(lin: Vector3) -> Vector3
-{
-    return Vector3{
-        math.sqrt(lin.x),
-        math.sqrt(lin.y),
-        math.sqrt(lin.z),
-    }
-}
-
-rgba8_from_color :: proc(in_color: Vector3, to_srgb := true) -> Color_RGBA
-{
-    result: Color_RGBA 
-
-    color := to_srgb ? srgb_from_linear(in_color) : in_color;
-
-    using result
-    r = u8(255.0*color.x)
-    g = u8(255.0*color.y)
-    b = u8(255.0*color.z)
-    a = 255
-
-    return result
-}
-
 Camera :: struct
 {
     origin    : Vector3,
@@ -91,6 +40,14 @@ compute_cached_camera :: proc "contextless" (camera: Camera) -> Cached_Camera
     return cached
 }
 
+Ray :: struct
+{
+    ro: Vector3,
+    rd: Vector3,
+    t_min: f32,
+    t_max: f32,
+}
+
 @(require_results)
 ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_min, t_max: f32) -> Ray
 {
@@ -110,14 +67,6 @@ ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_mi
     }
 
     return ray
-}
-
-Ray :: struct
-{
-    ro: Vector3,
-    rd: Vector3,
-    t_min: f32,
-    t_max: f32,
 }
 
 Render_Target :: struct
@@ -151,6 +100,60 @@ View :: struct
 {
     scene: ^Scene,
     camera: Cached_Camera,
+}
+
+Render_Params :: struct
+{
+    using view: View,
+    frame_index : u64,
+}
+
+frame_debug_color :: proc(frame_index: u64) -> (result: Vector3)
+{
+    bits := (frame_index % 6) + 1
+    result.x = (bits & 0x1) != 0 ? 1.0 : 0.0
+    result.y = (bits & 0x2) != 0 ? 1.0 : 0.0
+    result.z = (bits & 0x4) != 0 ? 1.0 : 0.0
+    return result
+}
+
+render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x1_, y0_, y1_: int)
+{
+    w      := render_target.w
+    h      := render_target.h
+    pitch  := render_target.pitch
+    pixels := render_target.pixels
+
+    x0 := math.clamp(x0_, 0, w)
+    x1 := math.clamp(x1_, 0, w)
+    y0 := math.clamp(y0_, 0, h)
+    y1 := math.clamp(y1_, 0, h)
+
+    for y := y0; y < y1; y += 1
+    {
+        ndc_y := 1.0 - 2.0*(f32(y) / f32(h))
+
+        for x := x0; x < x1; x += 1
+        {
+            ndc_x := 2.0*(f32(x) / f32(w)) - 1.0
+
+            ndc := Vector2{ndc_x, ndc_y}
+            pixel := render_pixel(params, ndc)
+
+            pixels[y*pitch + x] = pixel
+        }
+    }
+}
+
+@(require_results)
+render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
+{
+    ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
+    color := shade_ray(scene, ray)
+
+    color = apply_tonemap(color)
+
+    return rgba8_from_color(color)
 }
 
 schlick_fresnel :: proc(cos_theta: f32) -> f32
@@ -217,33 +220,6 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
     }
 
     return color
-}
-
-Render_Params :: struct
-{
-    camera      : Cached_Camera,
-    scene       : ^Scene,
-    frame_index : u64,
-}
-
-frame_debug_color :: proc(frame_index: u64) -> (result: Vector3)
-{
-    bits := (frame_index % 6) + 1
-    result.x = (bits & 0x1) != 0 ? 1.0 : 0.0
-    result.y = (bits & 0x2) != 0 ? 1.0 : 0.0
-    result.z = (bits & 0x4) != 0 ? 1.0 : 0.0
-    return result
-}
-
-@(require_results)
-render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
-{
-    ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
-    color := shade_ray(scene, ray)
-
-    color = apply_tonemap(color)
-
-    return rgba8_from_color(color)
 }
 
 @(require_results)

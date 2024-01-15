@@ -22,7 +22,7 @@ echo ==========================
 echo ===  BUILDING RELEASE  ===
 echo ==========================
 
-odin build code -debug -show-timings -microarch:native -o:aggressive -no-bounds-check -use-separate-modules -out:"build\odin-rt.exe"
+odin build code -debug -show-timings -microarch:native -o:aggressive -disable-assert -no-bounds-check -use-separate-modules -out:"build\odin-rt.exe"
 
 copy build\odin-rt.exe run\odin-rt.exe
 copy build\odin-rt.pdb run\odin-rt.pdb

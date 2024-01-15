@@ -102,9 +102,13 @@ main :: proc()
 
         // --
 
+        origin    := Vector3{ 50.0*math.cos(0.1*running_time), 20.0 + 2.5*math.cos(0.17*running_time), 50.0*math.sin(0.1*running_time) }
+        target    := Vector3{ 0.0, 15.0, 0.0 }
+        direction := target - origin
+
         camera := Camera{
-            origin    = { 0.0, 10.0, -50.0 },
-            direction = { 0.0, 0.0, 1.0 },
+            origin    = origin,
+            direction = direction,
             fov       = 85.0,
             aspect    = f32(preview_w) / f32(preview_h),
         }

@@ -92,11 +92,6 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
     }
 }
 
-// THREADING!
-// Things of note:
-// - Multiple frames can be in flight
-// - Uses "sequential discard" logic, if frame 2 is done before frame 1, frame 1 will never be shown
-
 render_thread_proc :: proc(data: Per_Thread_Render_Data)
 {
     ctx := data.ctx;
@@ -186,34 +181,6 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                     }
                 }
             }
-        }
-    }
-}
-
-render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x1_, y0_, y1_: int)
-{
-    w      := render_target.w
-    h      := render_target.h
-    pitch  := render_target.pitch
-    pixels := render_target.pixels
-
-    x0 := math.clamp(x0_, 0, w)
-    x1 := math.clamp(x1_, 0, w)
-    y0 := math.clamp(y0_, 0, h)
-    y1 := math.clamp(y1_, 0, h)
-
-    for y := y0; y < y1; y += 1
-    {
-        ndc_y := 1.0 - 2.0*(f32(y) / f32(h))
-
-        for x := x0; x < x1; x += 1
-        {
-            ndc_x := 2.0*(f32(x) / f32(w)) - 1.0
-
-            ndc := Vector2{ndc_x, ndc_y}
-            pixel := render_pixel(params, ndc)
-
-            pixels[y*pitch + x] = pixel
         }
     }
 }
