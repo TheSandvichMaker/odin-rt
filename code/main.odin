@@ -3,18 +3,24 @@ package rt
 import "core:fmt"
 import "core:math"
 import "core:c"
+import "core:intrinsics"
+import "core:time"
 import sdl "vendor:sdl2"
 
 main :: proc()
 {
-    x := 32
-    y := 64
-    w := 720
-    h := 480
+    window_x := 32
+    window_y := 64
+    window_w := 720
+    window_h := 480
 
-    window     := sdl.CreateWindow  ("odin-rt", c.int(x), c.int(y), c.int(w), c.int(h), sdl.WindowFlags{})
+    window     := sdl.CreateWindow  ("odin-rt", c.int(window_x), c.int(window_y), c.int(window_w), c.int(window_h), sdl.WindowFlags{})
     renderer   := sdl.CreateRenderer(window, -1, sdl.RendererFlags{.ACCELERATED, .PRESENTVSYNC})
-    backbuffer := sdl.CreateTexture (renderer, cast(u32)sdl.PixelFormatEnum.RGBA8888, sdl.TextureAccess.STREAMING, c.int(w), c.int(h))
+
+    preview_w := 480
+    preview_h := 320
+
+    backbuffer := sdl.CreateTexture (renderer, cast(u32)sdl.PixelFormatEnum.RGBA8888, sdl.TextureAccess.STREAMING, c.int(preview_w), c.int(preview_h))
 
     //
     // scene setup
@@ -41,7 +47,13 @@ main :: proc()
     //
     //
 
-    time: f32 = 0.0
+    running_time: f32 = 0.0
+
+    thread_ctx: Threaded_Render_Context
+    init_render_context(&thread_ctx, { preview_w, preview_h }, max_threads=-1)
+
+    now := time.tick_now()
+    dt: f32 = 1.0 / 60.0
 
     for
     {
@@ -57,25 +69,32 @@ main :: proc()
             }
         }
 
+        // -- 
+
         pixels_raw : rawptr
         pitch_raw  : c.int
         sdl.LockTexture(backbuffer, nil, &pixels_raw, &pitch_raw)
- 
-        pitch  := int(pitch_raw / 4)
-        pixels := ([^]Color_RGBA)(pixels_raw)[:h*pitch]
 
-        render_target := Render_Target{
-            w      = w,
-            h      = h,
-            pitch  = pitch,
-            pixels = pixels,
+        dst_pitch  := int(pitch_raw / 4)
+        dst_pixels := ([^]Color_RGBA)(pixels_raw)[:preview_h*dst_pitch]
+ 
+        dst_render_target := Render_Target{
+            w      = preview_w,
+            h      = preview_h,
+            pitch  = dst_pitch,
+            pixels = dst_pixels,
         }
+        maybe_copy_latest_frame(&thread_ctx, &dst_render_target)
+
+        sdl.UnlockTexture(backbuffer)
+
+        // --
 
         camera := Camera{
             origin    = { 0.0, 10.0, -50.0 },
             direction = {0.0, 0.0, 1.0 },
             fov       = 85.0,
-            aspect    = f32(w) / f32(h),
+            aspect    = f32(preview_w) / f32(preview_h),
         }
 
         view := View{
@@ -83,18 +102,23 @@ main :: proc()
             camera = compute_cached_camera(camera),
         }
 
-        moving_sphere.p.y = 25.0 + 7.5*math.sin(5.0*time)
+        moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
 
-        render_frame(&view, &render_target)
+        maybe_dispatch_frame(&thread_ctx, view);
 
-        sdl.UnlockTexture(backbuffer)
+        // --
 
         sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
         sdl.RenderSetClipRect(renderer, nil)
         sdl.RenderCopy(renderer, backbuffer, nil, nil)
         sdl.RenderPresent(renderer)
 
-        time += 1.0 / 60.0
+        // -- 
+
+        running_time += dt
+
+        dt_hires := time.tick_lap_time(&now)
+        dt = math.min(1.0 / 15.0, f32(time.duration_seconds(dt_hires)))
 
         if quit
         {

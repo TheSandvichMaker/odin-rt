@@ -16,6 +16,21 @@ Scene :: struct
     materials : [dynamic]Material,
 }
 
+copy_into_array :: proc(dst, src: ^[dynamic]$T)
+{
+    resize(dst, len(src))
+    copy_slice(dst[:], src[:])
+}
+
+deep_copy_scene :: proc(dst: ^Scene, src: ^Scene)
+{
+    dst.sun = src.sun
+
+    copy_into_array(&dst.spheres,   &src.spheres)
+    copy_into_array(&dst.planes,    &src.planes)
+    copy_into_array(&dst.materials, &src.materials)
+}
+
 add_material :: proc(scene: ^Scene, material: Material) -> Material_Index
 {
     index := len(scene.materials)

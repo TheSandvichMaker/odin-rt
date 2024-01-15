@@ -128,166 +128,29 @@ Render_Target :: struct
     pixels : []Color_RGBA,
 }
 
+allocate_render_target :: proc(resolution: [2]int) -> Render_Target
+{
+    using result: Render_Target
+    w      = resolution.x
+    h      = resolution.y
+    pitch  = w
+    pixels = make([]Color_RGBA, w*h)
+    return result
+}
+
+Accumulation_Buffer :: struct
+{
+    accumulated_frame_count : int,
+    w      : int,
+    h      : int,
+    pitch  : int,
+    pixels : []Vector3,
+}
+
 View :: struct
 {
     scene: ^Scene,
     camera: Cached_Camera,
-}
-
-render_frame :: proc(view: ^View, render_target: ^Render_Target)
-{
-    scene := view.scene
-
-    w      := render_target.w
-    h      := render_target.h
-    pitch  := render_target.pitch
-    pixels := render_target.pixels
-
-
-
-    for y := 0; y < h; y += 1
-    {
-        ndc_y := 1.0 - 2.0*(f32(y) / f32(h))
-
-        for x := 0; x < w; x += 1
-        {
-            ndc_x := 2.0*(f32(x) / f32(w)) - 1.0
-
-            ndc := Vector2{ ndc_x, ndc_y }
-
-            pixel := render_pixel(view, ndc)
-
-            #no_bounds_check {
-                pixels[y*pitch + x] = pixel
-            }
-        }
-    }
-}
-
-import "core:intrinsics"
-import "core:sync"
-
-Threaded_Render_Frame :: struct
-{
-    view: ^View,
-    render_target: ^Render_Target,
-
-    tile_size_x: int,
-    tile_size_y: int,
-    total_tile_count: int,
-
-    /* atomic */
-    next_tile_index    : int,
-    retired_tile_count : int,
-}
-
-Threaded_Render_Context :: struct
-{
-    cond  : sync.Cond,
-    mutex : sync.Mutex,
-    frames: [3]Threaded_Render_Frame,
-
-    frames_in_flight    : u64,
-    write_frame_index   : u64,
-    read_frame_index    : u64,
-    display_frame_index : u64,
-}
-
-Per_Thread_Render_Data :: struct
-{
-    ctx: ^Threaded_Render_Context,
-}
-
-render_thread_proc :: proc(data: Per_Thread_Render_Data)
-{
-    ctx := data.ctx;
-
-    for
-    {
-        sync.mutex_lock(&ctx.mutex)
-
-        for
-        {
-            read_frame_index  := intrinsics.volatile_load(&ctx.read_frame_index)
-            write_frame_index := intrinsics.volatile_load(&ctx.write_frame_index)
-
-            if read_frame_index < write_frame_index
-            {
-                break
-            }
-            else
-            {
-                sync.cond_wait(&ctx.cond, &ctx.mutex)
-            }
-        }
-
-        frame_index := intrinsics.volatile_load(&ctx.read_frame_index)
-
-        sync.mutex_unlock(&ctx.mutex)
-
-        frame := &ctx.frames[frame_index % len(ctx.frames)]
-
-        view  := frame.view
-        scene := view.scene
-
-        render_target := frame.render_target
-        w := render_target.w
-        h := render_target.h
-        pixels := render_target.pixels
-
-        tile_w := frame.tile_size_x
-        tile_h := frame.tile_size_y
-
-        tile_count_x := (w + tile_w - 1) / tile_w
-        tile_count_y := (h + tile_h - 1) / tile_h
-
-        for
-        {
-            tile_index := intrinsics.atomic_add(&frame.next_tile_index, 1)
-
-            if tile_index >= frame.total_tile_count
-            {
-                // all work for this frame has been taken up by existing threads
-                intrinsics.atomic_add(&ctx.read_frame_index, 1)
-                break;
-            }
-
-            tile_index_x := tile_index % tile_count_x
-            tile_index_y := tile_index / tile_count_x
-
-            tile_x0 := tile_index_x*tile_w
-            tile_y0 := tile_index_y*tile_h
-            tile_x1 := tile_x0 + tile_w
-            tile_y1 := tile_y0 + tile_h
-
-            for y := tile_y0; y < tile_y1; y += 1
-            {
-                ndc_y := 1.0 - 2.0*(f32(y) / f32(h))
-
-                i := tile_y0*w
-
-                for x := tile_x0; x < tile_x1; x += 1
-                {
-                    ndc_x := 2.0*(f32(x) / f32(w)) - 1.0
-
-                    ndc := Vector2{ndc_x, ndc_y}
-                    pixel := render_pixel(view, ndc)
-
-                    #no_bounds_check pixels[i] = pixel
-                    i += 1
-                }
-            }
-
-            retired_tile_count := intrinsics.atomic_add(&frame.retired_tile_count, 1) + 1
-            assert(retired_tile_count <= frame.total_tile_count)
-
-            if retired_tile_count == frame.total_tile_count
-            {
-                // frame is complete - retire frame
-                intrinsics.atomic_compare_exchange_strong(&ctx.display_frame_index, frame_index, frame_index + 1)
-            }
-        }
-    }
 }
 
 schlick_fresnel :: proc(cos_theta: f32) -> f32
@@ -356,12 +219,25 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
     return color
 }
 
-@(require_results)
-render_pixel :: proc(view: ^View, ndc: Vector2) -> Color_RGBA
+Render_Params :: struct
 {
-    camera := view.camera
-    scene  := view.scene
+    camera      : Cached_Camera,
+    scene       : ^Scene,
+    frame_index : u64,
+}
 
+frame_debug_color :: proc(frame_index: u64) -> (result: Vector3)
+{
+    bits := (frame_index % 6) + 1
+    result.x = (bits & 0x1) != 0 ? 1.0 : 0.0
+    result.y = (bits & 0x2) != 0 ? 1.0 : 0.0
+    result.z = (bits & 0x4) != 0 ? 1.0 : 0.0
+    return result
+}
+
+@(require_results)
+render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
+{
     ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
     color := shade_ray(scene, ray)
 
