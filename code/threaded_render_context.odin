@@ -6,22 +6,25 @@ import "core:sync"
 import "core:os"
 import "core:thread"
 import "core:fmt"
+import "core:simd/x86"
 
-Threaded_Render_Frame :: struct
+Threaded_Render_Frame :: struct #align(64)
 {
-    scene        : Scene,
-    camera       : Cached_Camera,
-    frame_buffer : Render_Target,
+    /* atomically written to stuff */
+    next_tile_index    : int, pad0 : [52]u8,
+    retired_tile_count : int, pad1 : [52]u8,
+    render_time_clocks : u64, pad2 : [52]u8,
 
-    tile_size_x: int,
-    tile_size_y: int,
-    tile_count_x: int,
-    tile_count_y: int,
-    total_tile_count: int,
+    /* not written to during rendering stuff */
+    scene            : Scene,
+    camera           : Cached_Camera,
+    frame_buffer     : Render_Target,
 
-    /* atomic */
-    next_tile_index    : int,
-    retired_tile_count : int,
+    tile_size_x      : int,
+    tile_size_y      : int,
+    tile_count_x     : int,
+    tile_count_y     : int,
+    total_tile_count : int,
 }
 
 Threaded_Render_Context :: struct
@@ -83,11 +86,49 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
     }
 }
 
+maybe_dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched: bool, frame_index: u64)
+{
+    sync.mutex_guard(&ctx.mutex)
+
+    display := intrinsics.atomic_load(&ctx.frame_display)
+    write   := intrinsics.atomic_load(&ctx.frame_write)
+    in_flight := write - display
+    if in_flight < 2
+    {
+        write_frame := &ctx.frames[write % len(ctx.frames)]
+        write_frame.camera = view.camera
+        deep_copy_scene(&write_frame.scene, view.scene)
+
+        {
+            using write_frame
+
+            w := frame_buffer.w
+            h := frame_buffer.w
+
+            tile_size_x        = 64
+            tile_size_y        = 64
+            tile_count_x       = (w + tile_size_x - 1) / tile_size_x
+            tile_count_y       = (h + tile_size_y - 1) / tile_size_y
+            total_tile_count   = tile_count_x*tile_count_y
+            next_tile_index    = 0
+            retired_tile_count = 0
+            render_time_clocks = 0
+        }
+
+        dispatched  = true
+        frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
+
+        sync.cond_broadcast(&ctx.cond)
+    }
+
+    return dispatched, frame_index
+}
+
 render_thread_proc :: proc(data: Per_Thread_Render_Data)
 {
     ctx := data.ctx;
 
-    outer_loop:
+    frame_loop:
     for
     {
         sync.mutex_lock(&ctx.mutex)
@@ -95,7 +136,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         if intrinsics.atomic_load(&ctx.exit)
         {
             sync.mutex_unlock(&ctx.mutex)
-            break outer_loop
+            break frame_loop
         }
 
         for
@@ -138,7 +179,9 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             frame_index = frame_index,
         }
 
-        tile_render:
+        clocks_spent: u64 = 0
+
+        tile_loop:
         for
         {
             tile_index := intrinsics.atomic_add(&frame.next_tile_index, 1)
@@ -151,7 +194,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                     intrinsics.atomic_add(&ctx.frame_read, 1)
                 }
 
-                break tile_render
+                break tile_loop
             }
 
             tile_index_x := tile_index % tile_count_x
@@ -162,7 +205,11 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             tile_x1 := tile_x0 + tile_w
             tile_y1 := tile_y0 + tile_h
 
+            clocks_start := x86._rdtsc()
             render_tile(params, render_target, tile_x0, tile_x1, tile_y0, tile_y1)
+            clocks_end := x86._rdtsc()
+
+            clocks_spent += clocks_end - clocks_start
 
             retired_tile_count := intrinsics.atomic_add(&frame.retired_tile_count, 1) + 1
             assert(retired_tile_count <= frame.total_tile_count)
@@ -182,54 +229,9 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 }
             }
         }
+
+        intrinsics.atomic_add(&frame.render_time_clocks, clocks_spent)
     }
-}
-
-frames_in_flight :: proc(ctx: ^Threaded_Render_Context) -> u64
-{
-    sync.mutex_guard(&ctx.mutex)
-
-    read  := intrinsics.atomic_load(&ctx.frame_read)
-    write := intrinsics.atomic_load(&ctx.frame_write)
-    in_flight := write - read
-    return in_flight
-}
-
-maybe_dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched: bool, frame_index: u64)
-{
-    sync.mutex_guard(&ctx.mutex)
-
-    display := intrinsics.atomic_load(&ctx.frame_display)
-    write   := intrinsics.atomic_load(&ctx.frame_write)
-    in_flight := write - display
-    if in_flight < 2
-    {
-        write_frame := &ctx.frames[write % len(ctx.frames)]
-        write_frame.camera = view.camera
-        deep_copy_scene(&write_frame.scene, view.scene)
-
-        {
-            using write_frame
-
-            w := frame_buffer.w
-            h := frame_buffer.w
-
-            tile_size_x        = 64
-            tile_size_y        = 64
-            tile_count_x       = (w + tile_size_x - 1) / tile_size_x
-            tile_count_y       = (h + tile_size_y - 1) / tile_size_y
-            total_tile_count   = tile_count_x*tile_count_y
-            next_tile_index    = 0
-            retired_tile_count = 0
-        }
-
-        dispatched  = true
-        frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
-
-        sync.cond_broadcast(&ctx.cond)
-    }
-
-    return dispatched, frame_index
 }
 
 maybe_copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) -> (copied: bool)
@@ -246,11 +248,13 @@ maybe_copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Targ
         dst_pitch  := dst.pitch
         dst_pixels := dst.pixels
 
-        src_frame  := ctx.frames[display_frame_index % len(ctx.frames)].frame_buffer
-        src_w      := src_frame.w
-        src_h      := src_frame.h
-        src_pitch  := src_frame.pitch
-        src_pixels := src_frame.pixels
+        frame := &ctx.frames[display_frame_index % len(ctx.frames)]
+
+        src_target := frame.frame_buffer
+        src_w      := src_target.w
+        src_h      := src_target.h
+        src_pitch  := src_target.pitch
+        src_pixels := src_target.pixels
 
         if dst_w == src_h ||
            dst_h == src_h
@@ -269,7 +273,8 @@ maybe_copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Targ
             ctx.last_frame_displayed = display_frame_index
             copied = true
 
-            fmt.printf("showed frame: %v\n", display_frame_index);
+            mega_cycles := f64(frame.render_time_clocks) / 1_000_000.0
+            fmt.printf("showed frame: %v (mcy: %.2f)\n", display_frame_index, mega_cycles);
         }
     }
 
