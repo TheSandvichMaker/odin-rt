@@ -24,20 +24,16 @@ Threaded_Render_Frame :: struct
     retired_tile_count : int,
 }
 
-Render_Thread :: struct
-{
-    thread: ^thread.Thread
-}
-
 Threaded_Render_Context :: struct
 {
     cond  : sync.Cond,
     mutex : sync.Mutex,
 
-    threads: [dynamic]Render_Thread,
+    threads: [dynamic]^thread.Thread,
 
     frames: [3]Threaded_Render_Frame,
 
+    exit          : bool,
     frame_read    : u64,
     frame_write   : u64,
     frame_display : u64,
@@ -67,8 +63,7 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
 
     core_count := os.processor_core_count()
 
-    // assume hyper threading
-    threads_to_spawn := (core_count / 2) - 1
+    threads_to_spawn := core_count - 1
 
     if max_threads > 0 
     {
@@ -84,11 +79,7 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
             ctx = ctx,
         }
 
-        thread := Render_Thread{
-            thread = thread.create_and_start_with_poly_data(data, render_thread_proc),
-        }
-
-        append(&ctx.threads, thread)
+        append(&ctx.threads, thread.create_and_start_with_poly_data(data, render_thread_proc))
     }
 }
 
@@ -96,9 +87,16 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
 {
     ctx := data.ctx;
 
+    outer_loop:
     for
     {
         sync.mutex_lock(&ctx.mutex)
+
+        if intrinsics.atomic_load(&ctx.exit)
+        {
+            sync.mutex_unlock(&ctx.mutex)
+            break outer_loop
+        }
 
         for
         {
@@ -140,6 +138,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             frame_index = frame_index,
         }
 
+        tile_render:
         for
         {
             tile_index := intrinsics.atomic_add(&frame.next_tile_index, 1)
@@ -151,7 +150,8 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 {
                     intrinsics.atomic_add(&ctx.frame_read, 1)
                 }
-                break;
+
+                break tile_render
             }
 
             tile_index_x := tile_index % tile_count_x
@@ -172,10 +172,10 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 // frame is complete - retire frame
                 for
                 {
+                    // SWAP_DISCARD style logic
                     new_frame_index := intrinsics.atomic_compare_exchange_strong(&ctx.frame_display, 
-                                                                                 frame_index - 1, 
-                                                                                 frame_index)
-                    if new_frame_index >= frame_index + 1
+                                                                                 frame_index - 1, frame_index)
+                    if new_frame_index >= frame_index
                     {
                         break;
                     }
@@ -226,7 +226,7 @@ maybe_dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (disp
         dispatched  = true
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
 
-        sync.cond_signal(&ctx.cond)
+        sync.cond_broadcast(&ctx.cond)
     }
 
     return dispatched, frame_index
@@ -274,4 +274,14 @@ maybe_copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Targ
     }
 
     return copied
+}
+
+safely_terminate_render_context :: proc(ctx: ^Threaded_Render_Context)
+{
+    sync.mutex_lock(&ctx.mutex)
+    intrinsics.atomic_exchange(&ctx.exit, true)
+    sync.mutex_unlock(&ctx.mutex)
+
+    sync.cond_broadcast(&ctx.cond);
+    thread.join_multiple(..ctx.threads[:])
 }

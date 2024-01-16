@@ -25,8 +25,8 @@ main :: proc()
 
     renderer := sdl.CreateRenderer(window, -1, sdl.RendererFlags{.ACCELERATED, .PRESENTVSYNC})
 
-    preview_w := 480
-    preview_h := 320
+    preview_w := 720
+    preview_h := 480
 
     backbuffer := sdl.CreateTexture(renderer, 
                                     cast(u32)sdl.PixelFormatEnum.RGBA8888, 
@@ -141,4 +141,6 @@ main :: proc()
             break
         }
     }
+
+    safely_terminate_render_context(&thread_ctx);
 }
