@@ -86,12 +86,20 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
     }
 }
 
-maybe_dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched: bool, frame_index: u64)
+can_dispatch_frame :: proc(ctx: ^Threaded_Render_Context) -> bool
+{
+    write   := intrinsics.atomic_load(&ctx.frame_write)
+    display := intrinsics.atomic_load(&ctx.frame_display)
+    in_flight := write - display
+    return in_flight < 2
+}
+
+dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched: bool, frame_index: u64)
 {
     sync.mutex_guard(&ctx.mutex)
 
-    display := intrinsics.atomic_load(&ctx.frame_display)
     write   := intrinsics.atomic_load(&ctx.frame_write)
+    display := intrinsics.atomic_load(&ctx.frame_display)
     in_flight := write - display
     if in_flight < 2
     {
@@ -234,10 +242,14 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
     }
 }
 
-maybe_copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) -> (copied: bool)
+frame_available :: proc(ctx: ^Threaded_Render_Context) -> bool
 {
-    sync.mutex_guard(&ctx.mutex)
+    display_frame_index := intrinsics.atomic_load(&ctx.frame_display)
+    return ctx.last_frame_displayed < display_frame_index
+}
 
+copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) -> (copied: bool)
+{
     display_frame_index := intrinsics.atomic_load(&ctx.frame_display)
     last_frame_displayed := ctx.last_frame_displayed
 

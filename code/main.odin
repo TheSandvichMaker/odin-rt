@@ -41,6 +41,10 @@ sdl_rect_from_mu_rect :: proc(rect: mu.Rect) -> sdl.Rect
 
 main :: proc()
 {
+    //
+    // create window
+    //
+
     window_x := 32
     window_y := 64
     window_w := 1280
@@ -117,13 +121,17 @@ main :: proc()
     }
 
     //
+    // initialize render context
     //
-    //
-
-    running_time: f32 = 0.0
 
     thread_ctx: Threaded_Render_Context
     init_render_context(&thread_ctx, { preview_w, preview_h }, max_threads=-1)
+
+    //
+    // main loop
+    //
+
+    running_time: f32 = 0.0
 
     now := time.tick_now()
     dt: f32 = 1.0 / 60.0
@@ -131,6 +139,10 @@ main :: proc()
     for
     {
         quit := false
+
+        //
+        // handle input
+        //
 
         event: sdl.Event
         for sdl.PollEvent(&event)
@@ -195,7 +207,7 @@ main :: proc()
         }
 
         //
-        // ui
+        // ui logic
         //
 
         mu.begin(&mu_ctx)
@@ -207,56 +219,64 @@ main :: proc()
 
         mu.end(&mu_ctx)
 
-        // -- 
+        //
+        // display most recent frame
+        //
 
-        pixels_raw : rawptr
-        pitch_raw  : c.int
-        sdl.LockTexture(backbuffer, nil, &pixels_raw, &pitch_raw)
+        if frame_available(&thread_ctx)
+        {
+            pixels_raw : rawptr
+            pitch_raw  : c.int
+            sdl.LockTexture(backbuffer, nil, &pixels_raw, &pitch_raw)
 
-        dst_pitch  := int(pitch_raw / 4)
-        dst_pixels := ([^]Color_RGBA)(pixels_raw)[:preview_h*dst_pitch]
- 
-        dst_render_target := Render_Target{
-            w      = preview_w,
-            h      = preview_h,
-            pitch  = dst_pitch,
-            pixels = dst_pixels,
+            dst_pitch  := int(pitch_raw / 4)
+            dst_pixels := ([^]Color_RGBA)(pixels_raw)[:preview_h*dst_pitch]
+     
+            dst_render_target := Render_Target{
+                w      = preview_w,
+                h      = preview_h,
+                pitch  = dst_pitch,
+                pixels = dst_pixels,
+            }
+            copy_latest_frame(&thread_ctx, &dst_render_target)
+
+            sdl.UnlockTexture(backbuffer)
         }
-        maybe_copy_latest_frame(&thread_ctx, &dst_render_target)
-
-        sdl.UnlockTexture(backbuffer)
-
-        // --
-
-        origin := Vector3{ 
-            50.0*math.cos(0.1*running_time), 
-            20.0 + 2.5*math.cos(0.17*running_time), 
-            50.0*math.sin(0.1*running_time),
-        }
-        target    := Vector3{ 0.0, 15.0, 0.0 }
-        direction := target - origin
-
-        camera := Camera{
-            origin    = origin,
-            direction = direction,
-            fov       = 85.0,
-            aspect    = f32(preview_w) / f32(preview_h),
-        }
-
-        view := View{
-            scene  = &scene,
-            camera = compute_cached_camera(camera),
-        }
-
-        moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
-
-        maybe_dispatch_frame(&thread_ctx, view);
-
-        // --
 
         sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
         sdl.RenderSetClipRect(renderer, nil)
         sdl.RenderCopy(renderer, backbuffer, nil, nil)
+
+        //
+        // dispatch new frame
+        //
+
+        moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
+
+        if can_dispatch_frame(&thread_ctx)
+        {
+            origin := Vector3{ 
+                50.0*math.cos(0.1*running_time), 
+                20.0 + 2.5*math.cos(0.17*running_time), 
+                50.0*math.sin(0.1*running_time),
+            }
+            target    := Vector3{ 0.0, 15.0, 0.0 }
+            direction := target - origin
+
+            camera := Camera{
+                origin    = origin,
+                direction = direction,
+                fov       = 85.0,
+                aspect    = f32(preview_w) / f32(preview_h),
+            }
+
+            view := View{
+                scene  = &scene,
+                camera = compute_cached_camera(camera),
+            }
+
+            dispatch_frame(&thread_ctx, view);
+        }
 
         //
         // render ui
@@ -294,7 +314,6 @@ main :: proc()
 
                 sdl.SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a)
                 sdl.RenderCopy(renderer, mu_font, &src_rect, &dst_rect)
-
             }
 
             command: ^mu.Command
@@ -321,9 +340,15 @@ main :: proc()
         }
         render_ui_with_sdl(&mu_ctx, renderer)
 
+        //
+        // present
+        //
+
         sdl.RenderPresent(renderer)
 
-        // -- 
+        //
+        // end of loop guff
+        //
 
         running_time += dt
 
