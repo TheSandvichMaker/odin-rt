@@ -14,6 +14,7 @@ Primitive_Kind :: enum
 {
     PLANE,
     SPHERE,
+    BOX,
 }
 
 Primitive :: struct
@@ -33,6 +34,12 @@ Plane :: struct
 {
     using base: Primitive,
     n: Vector3,
+}
+
+Box :: struct
+{
+    using base: Primitive,
+    r: Vector3,
 }
 
 @(require_results)
@@ -90,6 +97,34 @@ intersect_plane :: proc "contextless" (plane: ^Plane, using ray: Ray) -> (hit: b
 }
 
 @(require_results)
+intersect_box :: proc "contextless" (box: ^Box, using ray: Ray) -> (hit: bool, t: f32)
+{
+    rel_p := box.p - ro
+
+    m := 1.0 / rd
+    n := m*rel_p
+    k := vector3_abs(box.r)
+
+    t1 := -n - k
+    t2 := -n + k
+
+    tn := max3(t1)
+    tf := min3(t2)
+
+    if tn < tf
+    {
+        test_t := tn >= 0.0 ? tn : tf
+        if test_t >= t_min && test_t < t_max
+        {
+            hit = true
+            t   = test_t
+        }
+    }
+
+    return hit, t
+}
+
+@(require_results)
 primitive_normal_from_hit :: proc "contextless" (primitive: ^Primitive, hit_p: Vector3) -> Vector3
 {
     n: Vector3 = ---
@@ -101,6 +136,8 @@ primitive_normal_from_hit :: proc "contextless" (primitive: ^Primitive, hit_p: V
         case .PLANE:
             plane := (^Plane)(primitive)
             n = plane.n
+        case .BOX:
+            n = #force_inline box_normal_from_hit((^Box)(primitive), hit_p)
     }
     
     return n
@@ -112,8 +149,19 @@ sphere_normal_from_hit :: proc "contextless" (sphere: ^Sphere, hit_p: Vector3) -
     return normalize(hit_p - sphere.p)
 }
 
+@(require_results)
+box_normal_from_hit :: proc "contextless" (box: ^Box, hit_p: Vector3) -> Vector3
+{
+    rel_p  := hit_p - box.p
+    norm   := rel_p / box.r
+    norm_i := vector3_cast(i32, 1.001*norm)
+    n      := vector3_cast(f32, norm_i)
+    return n
+}
+
 normal_from_hit :: proc
 {
     primitive_normal_from_hit,
     sphere_normal_from_hit,
+    box_normal_from_hit,
 }

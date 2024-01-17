@@ -10,25 +10,32 @@ Directional_Light :: struct
 
 Scene :: struct
 {
+    // TODO: separate out static and dynamic scene objects, so that I only have to copy
+    // dynamic on frame dispatch.
+
+    // Probably that will just involve sending over a per-frame TLAS
+
     sun       : Directional_Light,
+    materials : [dynamic]Material,
     spheres   : [dynamic]Sphere,
     planes    : [dynamic]Plane,
-    materials : [dynamic]Material,
+    boxes     : [dynamic]Box,
 }
 
-copy_into_array :: proc(dst, src: ^[dynamic]$T)
+copy_into_array :: proc(dst: ^[dynamic]$T, src: []T)
 {
     resize(dst, len(src))
-    copy_slice(dst[:], src[:])
+    copy_slice(dst[:], src)
 }
 
 deep_copy_scene :: proc(dst: ^Scene, src: ^Scene)
 {
     dst.sun = src.sun
 
-    copy_into_array(&dst.spheres,   &src.spheres)
-    copy_into_array(&dst.planes,    &src.planes)
-    copy_into_array(&dst.materials, &src.materials)
+    copy_into_array(&dst.materials, src.materials[:])
+    copy_into_array(&dst.spheres,   src.spheres[:])
+    copy_into_array(&dst.planes,    src.planes[:])
+    copy_into_array(&dst.boxes,     src.boxes[:])
 }
 
 add_material :: proc(scene: ^Scene, material: Material) -> Material_Index
@@ -38,6 +45,7 @@ add_material :: proc(scene: ^Scene, material: Material) -> Material_Index
     return Material_Index(index)
 }
 
+@(require_results)
 get_material :: proc(scene: ^Scene, index: Material_Index) -> ^Material
 {
     return &scene.materials[index]
@@ -62,6 +70,17 @@ add_plane :: proc(scene: ^Scene, plane: Plane) -> ^Plane
 
     result := &scene.planes[index]
     result.kind = Primitive_Kind.PLANE
+
+    return result
+}
+
+add_box :: proc(scene: ^Scene, box: Box) -> ^Box
+{
+    index := len(scene.boxes)
+    append(&scene.boxes, box)
+
+    result := &scene.boxes[index]
+    result.kind = Primitive_Kind.BOX
 
     return result
 }
@@ -94,6 +113,21 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
         if hit && hit_t < t
         {
             result = &plane
+            t      = hit_t
+
+            when early_out
+            {
+                return result, t
+            }
+        }
+    }
+
+    for &box, box_index in scene.boxes
+    {
+        hit, hit_t := #force_inline intersect_box(&box, ray)
+        if hit && hit_t < t
+        {
+            result = &box
             t      = hit_t
 
             when early_out

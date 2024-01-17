@@ -16,8 +16,8 @@ Threaded_Render_Frame :: struct #align(64)
     render_time_clocks : u64, pad2 : [52]u8,
 
     /* not written to during rendering stuff */
-    scene            : Scene,
-    camera           : Cached_Camera,
+    view             : View,
+    scene_cloned     : Scene,
     frame_buffer     : Render_Target,
 
     tile_size_x      : int,
@@ -104,24 +104,23 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched
     if in_flight < 2
     {
         write_frame := &ctx.frames[write % len(ctx.frames)]
-        write_frame.camera = view.camera
-        deep_copy_scene(&write_frame.scene, view.scene)
 
-        {
-            using write_frame
+        write_frame.view = view
+        deep_copy_scene(&write_frame.scene_cloned, view.scene)
 
-            w := frame_buffer.w
-            h := frame_buffer.w
+        write_frame.view.scene = &write_frame.scene_cloned
 
-            tile_size_x        = 64
-            tile_size_y        = 64
-            tile_count_x       = (w + tile_size_x - 1) / tile_size_x
-            tile_count_y       = (h + tile_size_y - 1) / tile_size_y
-            total_tile_count   = tile_count_x*tile_count_y
-            next_tile_index    = 0
-            retired_tile_count = 0
-            render_time_clocks = 0
-        }
+        w := write_frame.frame_buffer.w
+        h := write_frame.frame_buffer.w
+
+        write_frame.tile_size_x        = 64
+        write_frame.tile_size_y        = 64
+        write_frame.tile_count_x       = (w + write_frame.tile_size_x - 1) / write_frame.tile_size_x
+        write_frame.tile_count_y       = (h + write_frame.tile_size_y - 1) / write_frame.tile_size_y
+        write_frame.total_tile_count   = write_frame.tile_count_x*write_frame.tile_count_y
+        write_frame.next_tile_index    = 0
+        write_frame.retired_tile_count = 0
+        write_frame.render_time_clocks = 0
 
         dispatched  = true
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
@@ -167,8 +166,6 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         sync.mutex_unlock(&ctx.mutex)
 
         frame := &ctx.frames[frame_index % len(ctx.frames)]
-        camera        := frame.camera
-        scene         := &frame.scene
         render_target := &frame.frame_buffer
 
         w := render_target.w
@@ -182,8 +179,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         tile_count_y := frame.tile_count_y
 
         params := Render_Params{
-            camera      = camera,
-            scene       = scene,
+            view        = frame.view,
             frame_index = frame_index,
         }
 

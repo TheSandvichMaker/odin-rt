@@ -96,10 +96,25 @@ Accumulation_Buffer :: struct
     pixels : []Vector3,
 }
 
+View_Mode :: enum
+{
+    LIT,
+    DEPTH,
+    NORMALS,
+}
+
+Show_Flags :: enum
+{
+}
+
+Show_Flags_Set :: bit_set[Show_Flags]
+
 View :: struct
 {
-    scene: ^Scene,
-    camera: Cached_Camera,
+    scene      : ^Scene,
+    camera     : Cached_Camera,
+    view_mode  : View_Mode,
+    show_flags : Show_Flags_Set,
 }
 
 Render_Params :: struct
@@ -149,18 +164,49 @@ render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x
 render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
 {
     ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
-    color := shade_ray(scene, ray)
+
+    color: Vector3
+
+    switch view_mode
+    {
+    case .LIT:
+        color = shade_ray(scene, ray)
+    case .DEPTH:
+        color = show_depth(scene, ray)
+    case .NORMALS:
+        color = show_normals(scene, ray)
+    }
 
     color = apply_tonemap(color)
 
     return rgba8_from_color(color)
 }
 
-schlick_fresnel :: proc(cos_theta: f32) -> f32
+show_depth :: proc(scene: ^Scene, using ray: Ray) -> Vector3
 {
-    x      := 1.0 - cos_theta
-    x2     := x*x
-    result := x2*x2*x
+    result := Vector3{0, 0, 0}
+
+    primitive, t := intersect_scene(scene, ray)
+    if primitive != nil
+    {
+        result = Vector3{t, t, t} / 1000.0
+    }
+
+    return result
+}
+
+show_normals :: proc(scene: ^Scene, using ray: Ray) -> Vector3
+{
+    result := Vector3{0, 0, 0}
+
+    primitive, t := intersect_scene(scene, ray)
+    if primitive != nil
+    {
+        p := ro + t*rd
+        n: Vector3 = normal_from_hit(primitive, p)
+        result = 0.5 + 0.5*n
+    }
+
     return result
 }
 

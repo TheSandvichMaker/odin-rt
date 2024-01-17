@@ -1,5 +1,30 @@
 package rt
 
+// TODO:
+// [ ] - camera controls
+// [ ] - basic pathtracing algorithm
+// [ ] - image writing
+// [ ] - output render mode
+// [ ] - box intersection
+// [ ] - triangle intersection
+// [ ] - bvh construction
+// [ ] - bvh traversal
+// [ ] - simple translucency
+// [ ] - physically based BRDF
+// [ ] - nested objects and material transitions between them
+// [ ] - area lights
+// [ ] - model loading (cgltf)
+// [ ] - scene loading (cgltf)
+// [ ] - create scene format
+// [ ] - serialize scene format
+// [ ] - scene editor controls
+// [ ] - scene undo/redo
+// [ ] - support multi-scattering
+// [ ] - CSG operations
+// [ ] - animation support
+// [ ] - animation editor
+// [ ] - animation rendering
+
 import "core:fmt"
 import "core:math"
 import "core:c"
@@ -80,7 +105,7 @@ main :: proc()
     mu_ctx.text_width  = mu.default_atlas_text_width
     mu_ctx.text_height = mu.default_atlas_text_height
 
-    create_mu_font :: proc(renderer: ^sdl.Renderer) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
+    create_default_atlas_font :: proc(renderer: ^sdl.Renderer) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
     {
         surface = sdl.CreateRGBSurfaceWithFormat(0, mu.DEFAULT_ATLAS_WIDTH, mu.DEFAULT_ATLAS_HEIGHT, 
                                                  32, cast(u32)sdl.PixelFormatEnum.RGBA8888)
@@ -97,7 +122,7 @@ main :: proc()
         return surface, texture
     }
 
-    mu_font_surface, mu_font = create_mu_font(renderer)
+    mu_font_surface, mu_font = create_default_atlas_font(renderer)
 
     //
     // scene setup
@@ -120,12 +145,17 @@ main :: proc()
         moving_sphere = add_sphere(&scene, { p = { 0.0, 15.0, 0.0 }, r = 15.0, material = material })
     }
 
+    {
+        material := add_material(&scene, { albedo = { 0.2, 0.8, 0.1 }, reflectiveness = 0.5 })
+        add_box(&scene, { p = { 0.0, 2.5, 0.0 }, r = { 45.0, 5.0, 45.0 }, material = material })
+    }
+
     //
     // initialize render context
     //
 
-    thread_ctx: Threaded_Render_Context
-    init_render_context(&thread_ctx, { preview_w, preview_h }, max_threads=-1)
+    rcx: Threaded_Render_Context
+    init_render_context(&rcx, { preview_w, preview_h }, max_threads=-1)
 
     //
     // main loop
@@ -135,6 +165,9 @@ main :: proc()
 
     now := time.tick_now()
     dt: f32 = 1.0 / 60.0
+
+    view_mode: View_Mode
+    show_flags: Show_Flags_Set
 
     for
     {
@@ -214,7 +247,12 @@ main :: proc()
 
         if mu.window(&mu_ctx, "Hello mUI", mu.Rect{ 10, 10, 320, i32(window_h) - 20 })
         {
-            mu.label(&mu_ctx, "I'm alive!!!!!!!!!")
+            if .ACTIVE in mu.header(&mu_ctx, "View Mode")
+            {
+                if .SUBMIT in mu.button(&mu_ctx, "Lit")     do view_mode = .LIT
+                if .SUBMIT in mu.button(&mu_ctx, "Depth")   do view_mode = .DEPTH
+                if .SUBMIT in mu.button(&mu_ctx, "Normals") do view_mode = .NORMALS
+            }
         }
 
         mu.end(&mu_ctx)
@@ -223,7 +261,7 @@ main :: proc()
         // display most recent frame
         //
 
-        if frame_available(&thread_ctx)
+        if frame_available(&rcx)
         {
             pixels_raw : rawptr
             pitch_raw  : c.int
@@ -238,7 +276,7 @@ main :: proc()
                 pitch  = dst_pitch,
                 pixels = dst_pixels,
             }
-            copy_latest_frame(&thread_ctx, &dst_render_target)
+            copy_latest_frame(&rcx, &dst_render_target)
 
             sdl.UnlockTexture(backbuffer)
         }
@@ -248,12 +286,16 @@ main :: proc()
         sdl.RenderCopy(renderer, backbuffer, nil, nil)
 
         //
-        // dispatch new frame
+        // update scene
         //
 
         moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
 
-        if can_dispatch_frame(&thread_ctx)
+        //
+        // dispatch new frame
+        //
+
+        if can_dispatch_frame(&rcx)
         {
             origin := Vector3{ 
                 50.0*math.cos(0.1*running_time), 
@@ -271,11 +313,13 @@ main :: proc()
             }
 
             view := View{
-                scene  = &scene,
-                camera = compute_cached_camera(camera),
+                scene      = &scene,
+                camera     = compute_cached_camera(camera),
+                view_mode  = view_mode,
+                show_flags = show_flags,
             }
 
-            dispatch_frame(&thread_ctx, view);
+            dispatch_frame(&rcx, view);
         }
 
         //
@@ -361,5 +405,5 @@ main :: proc()
         }
     }
 
-    safely_terminate_render_context(&thread_ctx);
+    safely_terminate_render_context(&rcx);
 }
