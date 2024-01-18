@@ -97,29 +97,19 @@ intersect_plane :: proc "contextless" (plane: ^Plane, using ray: Ray) -> (hit: b
 }
 
 @(require_results)
-intersect_box :: proc "contextless" (box: ^Box, using ray: Ray) -> (hit: bool, t: f32)
+intersect_box :: proc "contextless" (box: ^Box, r: Ray) -> (hit: bool, t: f32)
 {
-    rel_p := box.p - ro
+    box_min := box.p - box.r
+    box_max := box.p + box.r
 
-    m := 1.0 / rd
-    n := m*rel_p
-    k := vector3_abs(box.r)
+    t1 := r.rd_inv*(box_min - r.ro)
+    t2 := r.rd_inv*(box_max - r.ro)
 
-    t1 := -n - k
-    t2 := -n + k
+    tmin := max3(component_min(t1, t2))
+    tmax := min3(component_max(t1, t2))
 
-    tn := max3(t1)
-    tf := min3(t2)
-
-    if tn < tf
-    {
-        test_t := tn >= 0.0 ? tn : tf
-        if test_t >= t_min && test_t < t_max
-        {
-            hit = true
-            t   = test_t
-        }
-    }
+    t   = tmin
+    hit = t >= r.t_min && tmax >= tmin
 
     return hit, t
 }
@@ -132,12 +122,11 @@ primitive_normal_from_hit :: proc "contextless" (primitive: ^Primitive, hit_p: V
     switch primitive.kind
     {
         case .SPHERE:
-            n = #force_inline sphere_normal_from_hit((^Sphere)(primitive), hit_p)
+            n = sphere_normal_from_hit((^Sphere)(primitive), hit_p)
         case .PLANE:
-            plane := (^Plane)(primitive)
-            n = plane.n
+            n = (^Plane)(primitive).n
         case .BOX:
-            n = #force_inline box_normal_from_hit((^Box)(primitive), hit_p)
+            n = box_normal_from_hit((^Box)(primitive), hit_p)
     }
     
     return n
@@ -150,12 +139,37 @@ sphere_normal_from_hit :: proc "contextless" (sphere: ^Sphere, hit_p: Vector3) -
 }
 
 @(require_results)
-box_normal_from_hit :: proc "contextless" (box: ^Box, hit_p: Vector3) -> Vector3
+box_normal_from_hit :: proc "contextless" (box: ^Box, hit_p: Vector3) -> (n: Vector3)
 {
-    rel_p  := hit_p - box.p
-    norm   := rel_p / box.r
-    norm_i := vector3_cast(i32, 1.001*norm)
-    n      := vector3_cast(f32, norm_i)
+    rel_p := hit_p - box.p
+    norm  := rel_p / box.r
+
+    SLOW_BUT_ACCURATE :: false
+
+    when SLOW_BUT_ACCURATE
+    {
+        largest_i := 0
+        largest   := abs(norm.x)
+
+        for i := 1; i < 3; i += 1
+        {
+            x_abs := abs(norm[i])
+
+            if x_abs > largest
+            {
+                largest_i = i
+                largest   = x_abs
+            }
+        }
+
+        n[largest_i] = math.sign(norm[largest_i])
+    }
+    else
+    {
+        norm_i := vector3_cast(i32, 1.000001*norm)
+        n = vector3_cast(f32, norm_i)
+    }
+
     return n
 }
 

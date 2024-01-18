@@ -149,8 +149,8 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 break frame_loop
             }
 
-            read  := intrinsics.atomic_load(&ctx.frame_read)
-            write := intrinsics.atomic_load(&ctx.frame_write)
+            read  := ctx.frame_read
+            write := ctx.frame_write
 
             if read < write
             {

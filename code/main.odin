@@ -147,7 +147,7 @@ main :: proc()
 
     {
         material := add_material(&scene, { albedo = { 0.2, 0.8, 0.1 }, reflectiveness = 0.5 })
-        add_box(&scene, { p = { 0.0, 2.5, 0.0 }, r = { 45.0, 5.0, 45.0 }, material = material })
+        add_box(&scene, { p = { 0.0, 2.5, 0.0 }, r = { 15.0, 5.0, 15.0 }, material = material })
     }
 
     //

@@ -44,8 +44,22 @@ Ray :: struct
 {
     ro: Vector3,
     rd: Vector3,
+    rd_inv: Vector3,
     t_min: f32,
     t_max: f32,
+}
+
+@(require_results)
+make_ray :: proc "contextless" (ro: Vector3, rd: Vector3, t_min: f32 = 0.001, t_max: f32 = math.F32_MAX) -> Ray
+{
+    ray := Ray{
+        ro     = ro,
+        rd     = rd,
+        rd_inv = 1.0 / rd,
+        t_min  = t_min,
+        t_max  = t_max,
+    }
+    return ray
 }
 
 @(require_results)
@@ -54,18 +68,12 @@ ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_mi
     x := camera.x
     y := camera.y
     z := camera.z
-    o := camera.o
     film_distance := camera.film_distance
 
-    d := normalize(ndc.x*x + ndc.y*y - film_distance*z)
+    ro := camera.o
+    rd := normalize(ndc.x*x + ndc.y*y - film_distance*z)
 
-    ray := Ray{
-        ro    = o,
-        rd    = d,
-        t_min = t_min,
-        t_max = t_max,
-    }
-
+    ray := make_ray(ro, rd, t_min, t_max)
     return ray
 }
 
@@ -235,13 +243,7 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 
         if n_dot_l > 0.0
         {
-            shadow_ray := Ray{
-                ro    = p + 0.0001*n,
-                rd    = sun.d,
-                t_min = t_min,
-                t_max = t_max,
-            }
-
+            shadow_ray := make_ray(p + 0.0001*n, sun.d, t_min, t_max)
             in_shadow := intersect_scene_shadow(scene, shadow_ray)
 
             if !in_shadow
@@ -252,12 +254,7 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 
         if material.reflectiveness > 0.0
         {
-            next_ray := Ray{
-                ro    = p + 0.0001*n,
-                rd    = reflect(rd, n),
-                t_min = t_min,
-                t_max = t_max,
-            }
+            next_ray := make_ray(p + 0.0001*n, reflect(rd, n), t_min, t_max)
 
             cos_theta := -dot(rd, n)
             fresnel   := schlick_fresnel(cos_theta)

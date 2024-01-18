@@ -83,20 +83,34 @@ rgba8_from_color :: proc(in_color: Vector3, to_srgb := true) -> Color_RGBA
 }
 
 @(require_results)
-vector3_abs :: proc "contextless" (x: [3]f32) -> [3]f32
+component_abs :: proc "contextless" (x: Vector3) -> Vector3
 {
-    result := [3]f32{math.abs(x.x), math.abs(x.y), math.abs(x.z)}
+    result := Vector3{math.abs(x.x), math.abs(x.y), math.abs(x.z)}
     return result
 }
 
 @(require_results)
-min3 :: proc "contextless" (x: [3]f32) -> f32
+component_min :: proc "contextless" (a: Vector3, b: Vector3) -> Vector3
+{
+    result := Vector3{min(a.x, b.x), min(a.y, b.y), min(a.z, b.z)}
+    return result
+}
+
+@(require_results)
+component_max :: proc "contextless" (a: Vector3, b: Vector3) -> Vector3
+{
+    result := Vector3{max(a.x, b.x), max(a.y, b.y), max(a.z, b.z)}
+    return result
+}
+
+@(require_results)
+min3 :: proc "contextless" (x: Vector3) -> f32
 {
     return min(x.x, min(x.y, x.z))
 }
 
 @(require_results)
-max3 :: proc "contextless" (x: [3]f32) -> f32
+max3 :: proc "contextless" (x: Vector3) -> f32
 {
     return max(x.x, max(x.y, x.z))
 }
