@@ -6,6 +6,7 @@ import "core:sync"
 import "core:os"
 import "core:thread"
 import "core:fmt"
+import "core:time"
 import "core:simd/x86"
 
 Threaded_Render_Frame :: struct #align(64)
@@ -140,14 +141,14 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
     {
         sync.mutex_lock(&ctx.mutex)
 
-        if intrinsics.atomic_load(&ctx.exit)
-        {
-            sync.mutex_unlock(&ctx.mutex)
-            break frame_loop
-        }
-
         for
         {
+            if ctx.exit
+            {
+                sync.mutex_unlock(&ctx.mutex)
+                break frame_loop
+            }
+
             read  := intrinsics.atomic_load(&ctx.frame_read)
             write := intrinsics.atomic_load(&ctx.frame_write)
 
@@ -161,7 +162,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             }
         }
 
-        frame_index := intrinsics.atomic_load(&ctx.frame_read)
+        frame_index := ctx.frame_read
 
         sync.mutex_unlock(&ctx.mutex)
 
@@ -292,7 +293,7 @@ copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) ->
 safely_terminate_render_context :: proc(ctx: ^Threaded_Render_Context)
 {
     sync.mutex_lock(&ctx.mutex)
-    intrinsics.atomic_exchange(&ctx.exit, true)
+    ctx.exit = true
     sync.mutex_unlock(&ctx.mutex)
 
     sync.cond_broadcast(&ctx.cond);
