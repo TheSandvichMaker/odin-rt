@@ -4,8 +4,10 @@ import "core:fmt"
 import "core:mem"
 import "core:slice"
 import "core:intrinsics"
+import sm "core:container/small_array"
 
-BVH_TARGET_LEAF_COUNT :: 8
+BVH_TARGET_LEAF_COUNT  :: 8
+BVH_DEBUG_PARTITIONING :: false
 
 BVH_Builder_Input :: struct
 {
@@ -37,26 +39,22 @@ BVH :: struct
 
 build_bvh_from_primitives :: proc(primitives: []Primitive_Holder, allocator := context.allocator) -> BVH
 {
-    bvh: BVH
+    temp_scoped()
 
-    {
-        temp_scoped()
+    primitive_count := len(primitives)
 
-        primitive_count := len(primitives)
-
-        input: BVH_Builder_Input = {
-            bounds  = make([]Rect3, primitive_count, context.temp_allocator),
-            indices = make([]u32,   primitive_count, context.temp_allocator),
-        }
-
-        for i := 0; i < primitive_count; i += 1
-        {
-            #no_bounds_check input.indices[i] = u32(i)
-            #no_bounds_check input.bounds [i] = find_primitive_bounds(&primitives[i].primitive)
-        }
-
-        bvh = build_bvh_from_input(input, allocator)
+    input: BVH_Builder_Input = {
+        bounds  = make([]Rect3, primitive_count, context.temp_allocator),
+        indices = make([]u32,   primitive_count, context.temp_allocator),
     }
+
+    for i := 0; i < primitive_count; i += 1
+    {
+        #no_bounds_check input.indices[i] = u32(i)
+        #no_bounds_check input.bounds [i] = find_primitive_bounds(&primitives[i].primitive)
+    }
+
+    bvh := build_bvh_from_input(input, allocator)
 
     return bvh
 }
@@ -86,6 +84,29 @@ build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allo
 build_bvh :: proc {
     build_bvh_from_primitives,
     build_bvh_from_input,
+}
+
+visit_bvh :: proc(bvh: ^BVH, $visitor: proc(bvh: ^BVH, node: ^BVH_Node, userdata: rawptr), userdata: rawptr = nil)
+{
+    stack: sm.Small_Array(32, u32)
+
+    sm.push_back(&stack, 0)
+
+    for sm.len(stack) > 0
+    {
+        node_index := sm.pop_back(&stack)
+        node := &bvh.nodes[node_index]
+
+        visitor(bvh, node, userdata)
+
+        if node.count == 0
+        {
+            left  := node.left_or_first
+            right := left + 1
+            sm.push_back(&stack, left)
+            sm.push_back(&stack, right)
+        }
+    }
 }
 
 @(private="file")
@@ -143,76 +164,17 @@ compute_bounding_volume :: proc(builder: ^BVH_Builder, indices: []u32) -> Rect3
 
 @(private="file")
 partition_objects :: proc(builder: ^BVH_Builder, parent_bounds: Rect3, split_axis: int, indices: []u32) -> (u32, bool) #no_bounds_check {
-    pivot      := 0.5*(parent_bounds.min[split_axis] + parent_bounds.max[split_axis])
-    
+    pivot := 0.5*(parent_bounds.min[split_axis] + parent_bounds.max[split_axis])
     count := len(indices)
 
     i := 0
     j := count - 1
 
-    find_pivot :: proc(builder: ^BVH_Builder, split_axis: int, index: u32) -> f32 #no_bounds_check {
-        bounds := &builder.bounds[index]
-        p := 0.5*(bounds.min[split_axis] + bounds.max[split_axis])
-        return p
-    }
-
-    print_pivots :: proc(builder: ^BVH_Builder, parent_bounds: Rect3, split_axis: int, pivot: f32, 
-                         indices_before: []u32, indices: []u32)
+    when BVH_DEBUG_PARTITIONING
     {
-        @(thread_local)
-        partition_count := 0
-
-        axis_names := [?]string { "X", "Y", "Z" }
-        fmt.printf("pivot swaps #%v (axis: %v bounds: %v):\n", partition_count, axis_names[split_axis], parent_bounds)
-
-        printed_count := 0
-
-        for _, i in indices
-        {
-            index_before := indices_before[i]
-            index_after  := indices[i]
-
-            PRINT_ALL :: false
-            if PRINT_ALL || index_before != index_after
-            {
-                p_before := find_pivot(builder, split_axis, index_before)
-                p_after  := find_pivot(builder, split_axis, index_after)
-
-                fmt.printf("\t#%v\t", i)
-
-                if index_before == index_after
-                {
-                    fmt.printf("(%v)\t\t", index_after)
-                }
-                else
-                {
-                    fmt.printf("(%v -> %v)\t", index_before, index_after)
-                }
-
-                fmt.printf("%v %v %v (%v)\n", p_after, p_after < pivot ? "<" : ">", pivot, p_before)
-
-                printed_count += 1
-            }
-        }
-
-        if printed_count == 0
-        {
-            fmt.printf("\tno swaps occurred. that is definitely a bug.\n")
-        }
-
-        fmt.printf("bounds:\n")
-        for index, i in indices
-        {
-            bounds := builder.bounds[index]
-            p := find_pivot(builder, split_axis, index)
-            fmt.printf("\t#%v(%v)\t%v (%v)\n", i, index, bounds, p)
-        }
-
-        partition_count += 1
+        temp_scoped()
+        indices_before := slice.clone(indices, context.temp_allocator)
     }
-
-    temp_scoped()
-    indices_before := slice.clone(indices, context.temp_allocator)
 
     for
     {
@@ -231,9 +193,19 @@ partition_objects :: proc(builder: ^BVH_Builder, parent_bounds: Rect3, split_axi
         indices[i], indices[j] = indices[j], indices[i]
     }
 
-    print_pivots(builder, parent_bounds, split_axis, pivot, indices_before, indices)
+    when BVH_DEBUG_PARTITIONING
+    {
+        print_pivots(builder, parent_bounds, split_axis, pivot, indices_before, indices)
+    }
 
     return u32(i), (i != 0 && i != count)
+}
+
+@(private="file")
+find_pivot :: proc(builder: ^BVH_Builder, split_axis: int, index: u32) -> f32 #no_bounds_check {
+    bounds := &builder.bounds[index]
+    p := 0.5*(bounds.min[split_axis] + bounds.max[split_axis])
+    return p
 }
 
 @(private="file")
@@ -251,5 +223,65 @@ find_primitive_bounds :: proc(primitive: ^Primitive) -> (result: Rect3)
             panic("Don't put an infinite plane in a BVH!")
     }
     return result
+}
+
+//
+//
+//
+
+@(private="file")
+debug_print_pivots :: proc(builder: ^BVH_Builder, parent_bounds: Rect3, split_axis: int, pivot: f32, 
+                           indices_before: []u32, indices: []u32)
+{
+    @(thread_local)
+    partition_count := 0
+
+    axis_names := [?]string { "X", "Y", "Z" }
+    fmt.printf("pivot swaps #%v (axis: %v bounds: %v):\n", partition_count, axis_names[split_axis], parent_bounds)
+
+    printed_count := 0
+
+    for _, i in indices
+    {
+        index_before := indices_before[i]
+        index_after  := indices[i]
+
+        PRINT_ALL :: false
+        if PRINT_ALL || index_before != index_after
+        {
+            p_before := find_pivot(builder, split_axis, index_before)
+            p_after  := find_pivot(builder, split_axis, index_after)
+
+            fmt.printf("\t#%v\t", i)
+
+            if index_before == index_after
+            {
+                fmt.printf("(%v)\t\t", index_after)
+            }
+            else
+            {
+                fmt.printf("(%v -> %v)\t", index_before, index_after)
+            }
+
+            fmt.printf("%v %v %v (%v)\n", p_after, p_after < pivot ? "<" : ">", pivot, p_before)
+
+            printed_count += 1
+        }
+    }
+
+    if printed_count == 0
+    {
+        fmt.printf("\tno swaps occurred. that is definitely a bug.\n")
+    }
+
+    fmt.printf("bounds:\n")
+    for index, i in indices
+    {
+        bounds := builder.bounds[index]
+        p := find_pivot(builder, split_axis, index)
+        fmt.printf("\t#%v(%v)\t%v (%v)\n", i, index, bounds, p)
+    }
+
+    partition_count += 1
 }
 

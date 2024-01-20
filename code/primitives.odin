@@ -106,6 +106,23 @@ intersect_plane :: proc "contextless" (plane: ^Plane, using ray: Ray) -> (hit: b
 }
 
 @(require_results)
+intersect_box_simple :: #force_no_inline proc "contextless" (ray: Ray, p: Vector3, r: Vector3) -> (hit: bool, t: f32)
+{
+    m  := ray.rd_inv
+    n  := m*(ray.ro - p)
+    k  := component_abs(m)*r
+    t1 := -n - k
+    t2 := -n + k
+    tn := max3(t1)
+    tf := min3(t2)
+
+    t   = tn
+    hit = t >= ray.t_min && tf >= tn
+
+    return hit, t
+}
+
+@(require_results)
 intersect_box :: #force_no_inline proc "contextless" (box: ^Box, r: Ray) -> (hit: bool, t: f32)
 {
     // to review: https://iquilezles.org/articles/boxfunctions/

@@ -144,6 +144,13 @@ Rect3 :: struct
     max: Vector3,
 }
 
+rect3_get_position_radius :: proc(rect: Rect3) -> (p: Vector3, r: Vector3)
+{
+    p = 0.5*(rect.min + rect.max)
+    r = 0.5*(rect.max - rect.min)
+    return p, r
+}
+
 rect3_inverted_infinity :: proc() -> Rect3
 {
     rect: Rect3 = {

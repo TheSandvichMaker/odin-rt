@@ -1,6 +1,7 @@
 package rt
 
 // TODO:
+// [ ] - grab d3d11 device from SDL and render using d3d11 directly
 // [ ] - camera controls
 // [ ] - accumulation buffer
 // [ ] - tonemapping
@@ -9,7 +10,7 @@ package rt
 // [ ] - output render mode
 // [x] - box intersection
 // [ ] - triangle intersection
-// [ ] - bvh construction
+// [x] - bvh construction
 // [ ] - bvh traversal
 // [ ] - simple translucency
 // [ ] - physically based BRDF
@@ -194,6 +195,7 @@ main :: proc()
 
     view_mode: View_Mode
     show_flags: Show_Flags_Set
+    fov := f32(85.0)
 
     for
     {
@@ -279,6 +281,9 @@ main :: proc()
                 if .SUBMIT in mu.button(&mu_ctx, "Depth")   do view_mode = .DEPTH
                 if .SUBMIT in mu.button(&mu_ctx, "Normals") do view_mode = .NORMALS
             }
+
+            mu.label(&mu_ctx, "fov")
+            mu.slider(&mu_ctx, &fov, 45.0, 100.0)
         }
 
         mu.end(&mu_ctx)
@@ -321,31 +326,114 @@ main :: proc()
         // dispatch new frame
         //
 
+        origin := Vector3{ 
+            50.0*math.cos(0.1*running_time), 
+            20.0 + 2.5*math.cos(0.17*running_time), 
+            50.0*math.sin(0.1*running_time),
+        }
+        target    := Vector3{ 0.0, 15.0, 0.0 }
+        direction := target - origin
+
+        camera := Camera{
+            origin    = origin,
+            direction = direction,
+            fov       = fov,
+            aspect    = f32(preview_w) / f32(preview_h),
+        }
+
+        view := View{
+            scene      = &scene,
+            camera     = compute_cached_camera(camera),
+            view_mode  = view_mode,
+            show_flags = show_flags,
+        }
+
         if can_dispatch_frame(&rcx)
         {
-            origin := Vector3{ 
-                50.0*math.cos(0.1*running_time), 
-                20.0 + 2.5*math.cos(0.17*running_time), 
-                50.0*math.sin(0.1*running_time),
-            }
-            target    := Vector3{ 0.0, 15.0, 0.0 }
-            direction := target - origin
-
-            camera := Camera{
-                origin    = origin,
-                direction = direction,
-                fov       = 85.0,
-                aspect    = f32(preview_w) / f32(preview_h),
-            }
-
-            view := View{
-                scene      = &scene,
-                camera     = compute_cached_camera(camera),
-                view_mode  = view_mode,
-                show_flags = show_flags,
-            }
-
             dispatch_frame(&rcx, view);
+        }
+
+        //
+        // debug visualization
+        //
+
+        Line_Renderer :: struct
+        {
+            renderer : ^sdl.Renderer,
+            camera   : Cached_Camera,
+            viewport : Vector2,
+        }
+
+        line_renderer := Line_Renderer{
+            renderer = renderer,
+            camera   = view.camera,
+            viewport = Vector2{f32(window_w), f32(window_h)},
+        }
+
+        draw_line :: proc(using line_renderer: ^Line_Renderer, color: Vector3, a: Vector3, b: Vector3)
+        {
+            rgba := rgba8_from_color(color)
+            sdl.SetRenderDrawColor(renderer, rgba.r, rgba.g, rgba.b, 255)
+
+            a_projected := project_point(camera, a)
+            b_projected := project_point(camera, b)
+            
+            // very coarse clipping
+            if a_projected.z < 0.0 || b_projected.z < 0.0
+            {
+                return
+            }
+
+            a_screen := viewport*(0.5 + 0.5*a_projected.xy)
+            b_screen := viewport*(0.5 + 0.5*b_projected.xy)
+
+            sdl.RenderDrawLine(renderer,
+                c.int(a_screen.x), c.int(a_screen.y),
+                c.int(b_screen.x), c.int(b_screen.y))
+        }
+
+        draw_box :: proc(using line_renderer: ^Line_Renderer, color: Vector3, p: Vector3, r: Vector3)
+        {
+            p000 := p + Vector3{-r.x, -r.y, -r.z}
+            p100 := p + Vector3{ r.x, -r.y, -r.z}
+            p110 := p + Vector3{ r.x,  r.y, -r.z}
+            p010 := p + Vector3{-r.x,  r.y, -r.z}
+            p001 := p + Vector3{-r.x, -r.y,  r.z}
+            p101 := p + Vector3{ r.x, -r.y,  r.z}
+            p111 := p + Vector3{ r.x,  r.y,  r.z}
+            p011 := p + Vector3{-r.x,  r.y,  r.z}
+            draw_line(line_renderer, color, p000, p100)
+            draw_line(line_renderer, color, p000, p010)
+            draw_line(line_renderer, color, p110, p100)
+            draw_line(line_renderer, color, p110, p010)
+            draw_line(line_renderer, color, p001, p101)
+            draw_line(line_renderer, color, p001, p011)
+            draw_line(line_renderer, color, p111, p101)
+            draw_line(line_renderer, color, p111, p011)
+            draw_line(line_renderer, color, p000, p001)
+            draw_line(line_renderer, color, p100, p101)
+            draw_line(line_renderer, color, p110, p111)
+            draw_line(line_renderer, color, p010, p011)
+        }
+
+        draw_bvh :: proc(using line_renderer: ^Line_Renderer, bvh: ^BVH)
+        {
+            visitor :: proc(bvh: ^BVH, node: ^BVH_Node, userdata: rawptr)
+            {
+                line_renderer := (^Line_Renderer)(userdata)
+                p, r := rect3_get_position_radius(node.bounds)
+                draw_line(line_renderer, Vector3{1, 0, 0}, p, r)
+            }
+
+            visit_bvh(bvh, visitor, line_renderer)
+        }
+
+        draw_bvh(&line_renderer, &bvh)
+
+        for box in scene.boxes
+        {
+            material := get_material(&scene, box.material)
+            draw_box(&line_renderer, material.albedo, box.p, box.r)
         }
 
         //

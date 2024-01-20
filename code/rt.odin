@@ -18,6 +18,7 @@ Cached_Camera  :: struct
     z: Vector3,
     o: Vector3,
     film_distance: f32,
+    aspect: f32,
 }
 
 @(require_results)
@@ -32,12 +33,29 @@ compute_cached_camera :: proc "contextless" (camera: Camera) -> Cached_Camera
         x = normalize(cross(WORLD_UP, camera.direction))
         y = normalize(cross(camera.direction, x))
         z = normalize(cross(y, x))
-        x *= camera.aspect
         o = camera.origin
+        aspect = camera.aspect
         film_distance = 1.0 / math.tan(math.to_radians(0.5*camera.fov))
     }
 
     return cached
+}
+
+@(require_results)
+project_point :: proc "contextless" (camera: Cached_Camera, p: Vector3) -> Vector3
+{
+    camera_rel_p := p - camera.o
+
+    camera_p := Vector3{
+         dot(camera.x, camera_rel_p), 
+        -dot(camera.y, camera_rel_p),
+        -dot(camera.z, camera_rel_p),
+    }
+
+    projected_p := camera_p
+    projected_p.xy *= camera.film_distance / camera_p.z
+    projected_p.x  /= camera.aspect
+    return projected_p
 }
 
 Ray :: struct
@@ -71,7 +89,7 @@ ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_mi
     film_distance := camera.film_distance
 
     ro := camera.o
-    rd := normalize(ndc.x*x + ndc.y*y - film_distance*z)
+    rd := normalize(ndc.x*x*camera.aspect + ndc.y*y - film_distance*z)
 
     ray := make_ray(ro, rd, t_min, t_max)
     return ray
