@@ -2,10 +2,12 @@ package rt
 
 // TODO:
 // [ ] - camera controls
-// [ ] - basic pathtracing algorithm
+// [ ] - accumulation buffer
+// [ ] - tonemapping
+// [ ] - basic pathtracing 
 // [ ] - image writing
 // [ ] - output render mode
-// [ ] - box intersection
+// [x] - box intersection
 // [ ] - triangle intersection
 // [ ] - bvh construction
 // [ ] - bvh traversal
@@ -19,7 +21,7 @@ package rt
 // [ ] - serialize scene format
 // [ ] - scene editor controls
 // [ ] - scene undo/redo
-// [ ] - support multi-scattering
+// [ ] - support multi-scattering in volumetrics
 // [ ] - CSG operations
 // [ ] - animation support
 // [ ] - animation editor
@@ -149,6 +151,30 @@ main :: proc()
         material := add_material(&scene, { albedo = { 0.2, 0.8, 0.1 }, reflectiveness = 0.5 })
         add_box(&scene, { p = { 0.0, 2.5, 0.0 }, r = { 15.0, 5.0, 15.0 }, material = material })
     }
+
+    {
+        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 1.0 })
+
+        spacing := f32(20.0)
+
+        for y := -3; y <= 3; y += 1
+        {
+            for x := -3; x <= 3; x += 1
+            {
+                p := Vector3{ f32(x)*spacing, 40.0, f32(y)*spacing }
+                add_sphere(&scene, { p = p, r = 7.5, material = material })
+            }
+        }
+    }
+
+    primitives: [dynamic]Primitive_Holder
+
+    for sphere in scene.spheres
+    {
+        append(&primitives, Primitive_Holder{ sphere = sphere })
+    }
+
+    bvh := build_bvh(primitives[:])
 
     //
     // initialize render context

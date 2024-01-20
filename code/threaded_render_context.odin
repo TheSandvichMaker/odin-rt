@@ -83,7 +83,10 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
             ctx = ctx,
         }
 
-        append(&ctx.threads, thread.create_and_start_with_poly_data(data, render_thread_proc))
+        t := thread.create_and_start_with_poly_data(data, render_thread_proc)
+        set_thread_description(t, fmt.tprintf("render thread #%v", i))
+
+        append(&ctx.threads, t)
     }
 }
 

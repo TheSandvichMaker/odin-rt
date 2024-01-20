@@ -94,7 +94,7 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 
     for &sphere, sphere_index in scene.spheres
     {
-        hit, hit_t := #force_inline intersect_sphere(&sphere, ray)
+        hit, hit_t := intersect_sphere(&sphere, ray)
         if hit && hit_t < t
         {
             result = &sphere
@@ -109,7 +109,7 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 
     for &plane, plane_index in scene.planes
     {
-        hit, hit_t := #force_inline intersect_plane(&plane, ray)
+        hit, hit_t := intersect_plane(&plane, ray)
         if hit && hit_t < t
         {
             result = &plane
@@ -124,7 +124,7 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 
     for &box, box_index in scene.boxes
     {
-        hit, hit_t := #force_inline intersect_box(&box, ray)
+        hit, hit_t := intersect_box(&box, ray)
         if hit && hit_t < t
         {
             result = &box
@@ -143,12 +143,12 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 @(require_results)
 intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
 {
-    return #force_inline intersect_scene_impl(scene, ray, false)
+    return intersect_scene_impl(scene, ray, false)
 }
 
 @(require_results)
 intersect_scene_shadow :: proc(scene: ^Scene, ray: Ray) -> bool
 {
-    primitive, t := #force_inline intersect_scene_impl(scene, ray, true)
+    primitive, t := intersect_scene_impl(scene, ray, true)
     return primitive != nil
 }

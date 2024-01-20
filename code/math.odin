@@ -6,6 +6,20 @@ import "core:math/linalg"
 Vector2 :: [2]f32
 Vector3 :: [3]f32
 Vector4 :: [4]f32
+f32x4   :: #simd[4]f32
+
+@(require_results) f32x4_from_vector2 :: #force_inline proc "contextless" (v: Vector2) -> f32x4 { return { v.x, v.y } }
+@(require_results) f32x4_from_vector3 :: #force_inline proc "contextless" (v: Vector3) -> f32x4 { return { v.x, v.y, v.z } }
+@(require_results) f32x4_from_vector4 :: #force_inline proc "contextless" (v: Vector4) -> f32x4 { return { v.x, v.y, v.z, v.w } }
+@(require_results) f32x4_from_floats  :: #force_inline proc "contextless" (x: f32 = 0.0, y: f32 = 0.0, z: f32 = 0.0, w: f32 = 0.0) -> f32x4 { return { x, y, z, w } }
+
+f32x4_from :: proc 
+{
+    f32x4_from_vector2,
+    f32x4_from_vector3,
+    f32x4_from_vector4,
+    f32x4_from_floats,
+}
 
 Vector2i :: [2]i32
 Vector3i :: [3]i32
@@ -121,5 +135,59 @@ schlick_fresnel :: proc "contextless" (cos_theta: f32) -> f32
     x      := 1.0 - cos_theta
     x2     := x*x
     result := x2*x2*x
+    return result
+}
+
+Rect3 :: struct
+{
+    min: Vector3,
+    max: Vector3,
+}
+
+rect3_inverted_infinity :: proc() -> Rect3
+{
+    rect: Rect3 = {
+        min = {  math.F32_MAX,  math.F32_MAX,  math.F32_MAX },
+        max = { -math.F32_MAX, -math.F32_MAX, -math.F32_MAX },
+    }
+    return rect
+}
+
+rect3_center_radius_vec3 :: proc(p: Vector3, r: Vector3) -> (result: Rect3)
+{
+    result.min = p - r
+    result.max = p + r
+    return result
+}
+
+rect3_center_radius_scalar :: proc(p: Vector3, r: f32) -> (result: Rect3)
+{
+    return #force_inline rect3_center_radius_vec3(p, { r, r, r })
+}
+
+rect3_center_radius :: proc {
+    rect3_center_radius_vec3,
+    rect3_center_radius_scalar,
+}
+
+rect3_union :: proc(a: Rect3, b: Rect3) -> (result: Rect3)
+{
+    result.min = component_min(a.min, b.min)
+    result.max = component_max(a.max, b.max)
+    return result
+}
+
+rect3_get_dim :: proc(rect: Rect3) -> Vector3
+{
+    return rect.max - rect.min
+}
+
+rect3_find_largest_axis :: proc(rect: Rect3) -> int
+{
+    dim := rect3_get_dim(rect)
+
+    result := 0
+    if abs(dim[1]) > abs(dim[result]) do result = 1
+    if abs(dim[2]) > abs(dim[result]) do result = 2
     return result
 }

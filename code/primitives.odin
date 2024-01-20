@@ -1,6 +1,7 @@
 package rt
 
 import "core:math"
+import "core:simd"
 
 Material :: struct
 {
@@ -40,6 +41,14 @@ Box :: struct
 {
     using base: Primitive,
     r: Vector3,
+}
+
+Primitive_Holder :: struct #raw_union
+{
+    primitive : Primitive,
+    sphere    : Sphere,
+    plane     : Plane,
+    box       : Box,
 }
 
 @(require_results)
@@ -97,19 +106,63 @@ intersect_plane :: proc "contextless" (plane: ^Plane, using ray: Ray) -> (hit: b
 }
 
 @(require_results)
-intersect_box :: proc "contextless" (box: ^Box, r: Ray) -> (hit: bool, t: f32)
+intersect_box :: #force_no_inline proc "contextless" (box: ^Box, r: Ray) -> (hit: bool, t: f32)
 {
-    box_min := box.p - box.r
-    box_max := box.p + box.r
+    // to review: https://iquilezles.org/articles/boxfunctions/
 
-    t1 := r.rd_inv*(box_min - r.ro)
-    t2 := r.rd_inv*(box_max - r.ro)
+    IQ :: false
+    when IQ
+    {
+        m  := r.rd_inv
+        n  := m*(r.ro - box.p)
+        k  := component_abs(m)*box.r
+        t1 := -n - k
+        t2 := -n + k
+        tn := max3(t1)
+        tf := min3(t2)
 
-    tmin := max3(component_min(t1, t2))
-    tmax := min3(component_max(t1, t2))
+        t   = tn
+        hit = t >= r.t_min && tf >= tn
+    }
+    else
+    {
+        SIMD :: true
+        when SIMD
+        {
+            // this is silly. don't do SIMD like this!
+            box_p := #force_inline f32x4_from(box.p.x, box.p.y, box.p.z, math.QNAN_F32)
+            box_r := #force_inline f32x4_from(box.r)
 
-    t   = tmin
-    hit = t >= r.t_min && tmax >= tmin
+            box_min := box_p - box_r
+            box_max := box_p + box_r
+
+            ro     := #force_inline f32x4_from(r.ro)
+            rd_inv := #force_inline f32x4_from(r.rd_inv)
+
+            t1 := rd_inv*(box_min - ro)
+            t2 := rd_inv*(box_max - ro)
+
+            tn := simd.reduce_max(simd.min(t1, t2))
+            tf := simd.reduce_min(simd.max(t1, t2))
+            
+            t   = tn
+            hit = t >= r.t_min && tf >= tn
+        }
+        else
+        {
+            box_min := box.p - box.r
+            box_max := box.p + box.r
+
+            t1 := r.rd_inv*(box_min - r.ro)
+            t2 := r.rd_inv*(box_max - r.ro)
+
+            tn := max3(component_min(t1, t2))
+            tf := min3(component_max(t1, t2))
+
+            t   = tn
+            hit = t >= r.t_min && tf >= tn
+        }
+    }
 
     return hit, t
 }
@@ -148,6 +201,8 @@ box_normal_from_hit :: proc "contextless" (box: ^Box, hit_p: Vector3) -> (n: Vec
 
     when SLOW_BUT_ACCURATE
     {
+        // TODO: Write (more) optimized version of this
+
         largest_i := 0
         largest   := abs(norm.x)
 
