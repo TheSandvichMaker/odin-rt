@@ -132,10 +132,9 @@ compute_bounding_volume :: proc(builder: ^BVH_Builder, indices: []u32) -> Rect3
 {
     result := rect3_inverted_infinity()
 
-    for _, i in indices
+    for index in indices
     {
-        #no_bounds_check index  := builder.indices[i]
-        #no_bounds_check bounds := builder.bounds [index]
+        #no_bounds_check bounds := builder.bounds[index]
         result = rect3_union(result, bounds)
     }
 
