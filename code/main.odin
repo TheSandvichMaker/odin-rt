@@ -34,6 +34,8 @@ import "core:c"
 import "core:intrinsics"
 import "core:time"
 import "core:strings"
+import "core:slice"
+import "core:runtime"
 import sdl "vendor:sdl2"
 import mu "vendor:microui"
 
@@ -65,6 +67,18 @@ mu_rect_from_sdl_rect :: proc(rect: sdl.Rect) -> mu.Rect
 sdl_rect_from_mu_rect :: proc(rect: mu.Rect) -> sdl.Rect
 {
     return { rect.x, rect.y, rect.w, rect.h }
+}
+
+mu_color_from_linear_srgb :: proc(srgb: Vector3) -> mu.Color
+{
+    rgba := rgba8_from_color(srgb)
+    result := mu.Color{
+        r = rgba.r,
+        g = rgba.g,
+        b = rgba.b,
+        a = rgba.a,
+    }
+    return result
 }
 
 main :: proc()
@@ -142,6 +156,7 @@ main :: proc()
         add_plane(&scene, { p = { 0.0, 0.0, 0.0 }, n = { 0.0, 1.0, 0.0 }, material = material })
     }
 
+    /*
     moving_sphere: ^Sphere
     {
         material := add_material(&scene, { albedo = { 0.0, 0.5, 1.0 }, reflectiveness = 1.0 })
@@ -152,9 +167,10 @@ main :: proc()
         material := add_material(&scene, { albedo = { 0.2, 0.8, 0.1 }, reflectiveness = 0.5 })
         add_box(&scene, { p = { 0.0, 2.5, 0.0 }, r = { 15.0, 5.0, 15.0 }, material = material })
     }
+    */
 
     {
-        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 1.0 })
+        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 0.0 })
 
         spacing := f32(20.0)
 
@@ -162,20 +178,22 @@ main :: proc()
         {
             for x := -3; x <= 3; x += 1
             {
-                p := Vector3{ f32(x)*spacing, 40.0, f32(y)*spacing }
-                add_sphere(&scene, { p = p, r = 7.5, material = material })
+                p := Vector3{ f32(x)*spacing, 10.0, f32(y)*spacing }
+                add_box(&scene, { p = p, r = 7.5, material = material })
             }
         }
     }
 
     primitives: [dynamic]Primitive_Holder
 
-    for sphere in scene.spheres
+    for box in scene.boxes
     {
-        append(&primitives, Primitive_Holder{ sphere = sphere })
+        append(&primitives, Primitive_Holder{ box = box })
     }
 
-    bvh := build_bvh(primitives[:])
+    // TODO: figure it out!
+    scene.bvh = build_bvh(primitives[:])
+    scene.primitives = primitives
 
     //
     // initialize render context
@@ -188,14 +206,33 @@ main :: proc()
     // main loop
     //
 
-    running_time: f32 = 0.0
+    running_time: f64 = 0.0
 
     now := time.tick_now()
     dt: f32 = 1.0 / 60.0
 
-    view_mode: View_Mode
+    view_mode: View_Mode = .LIT
     show_flags: Show_Flags_Set
     fov := f32(85.0)
+
+    bvh_max_depth := find_bvh_max_depth(&scene.bvh)
+
+    Draw_BVH_Args :: struct
+    {
+        show_depth: int `ui_min: -1, ui_max: 10`,
+    }
+
+    draw_bvh_args: Draw_BVH_Args = {
+        show_depth = -1,
+    }
+
+    mouse_p: [2]int
+    lmb_down     : bool
+    lmb_pressed  : bool
+    lmb_released : bool
+
+    pause_animations: bool
+    last_camera: Cached_Camera
 
     for
     {
@@ -204,6 +241,9 @@ main :: proc()
         //
         // handle input
         //
+
+        lmb_pressed  = false
+        lmb_released = false
 
         event: sdl.Event
         for sdl.PollEvent(&event)
@@ -248,14 +288,26 @@ main :: proc()
 
                 case .MOUSEMOTION:
                     mu.input_mouse_move(&mu_ctx, event.motion.x, event.motion.y)
+                    mouse_p[0] = int(event.motion.x)
+                    mouse_p[1] = int(event.motion.y)
 
                 case .MOUSEBUTTONDOWN:
                     ok, button := translate_button(event.button.button)
                     if ok do mu.input_mouse_down(&mu_ctx, event.button.x, event.button.y, button)
+                    if button == .LEFT
+                    {
+                        lmb_pressed = true
+                        lmb_down    = true
+                    }
 
                 case .MOUSEBUTTONUP:
                     ok, button := translate_button(event.button.button)
                     if ok do mu.input_mouse_up(&mu_ctx, event.button.x, event.button.y, button)
+                    if button == .LEFT
+                    {
+                        lmb_released = true
+                        lmb_down     = false
+                    }
 
                 case .KEYDOWN:
                     ok, key := translate_key(event.key.keysym.sym)
@@ -267,6 +319,22 @@ main :: proc()
             }
         }
 
+        mu_has_mouse := mu_ctx.hover_id != 0
+
+        debug_ray_primitive: ^Primitive
+        debug_ray_t: f32
+        debug_ray_info: Ray_Debug_Info
+
+        if !mu_has_mouse && lmb_down
+        {
+            uv := Vector2{f32(mouse_p[0]) / f32(window_w), 1.0 - f32(mouse_p[1]) / f32(window_h)}
+            ray := ray_from_camera_uv(last_camera, uv)
+            prev_allocator := context.allocator
+            context.allocator = context.temp_allocator
+            debug_ray_primitive, debug_ray_t = intersect_scene_accelerated_impl(&scene, ray, EARLY_OUT=false, WRITE_DEBUG_INFO=true, debug=&debug_ray_info)
+            context.allocator = prev_allocator
+        }
+
         //
         // ui logic
         //
@@ -275,15 +343,119 @@ main :: proc()
 
         if mu.window(&mu_ctx, "Hello mUI", mu.Rect{ 10, 10, 320, i32(window_h) - 20 })
         {
+            // mu_struct(&mu_ctx, &draw_bvh_args)
+
+            mu_flags :: proc(mu_ctx: ^mu.Context, flags: ^bit_set[$T])
+            {
+                type_info := type_info_of(T)
+                if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
+                {
+                    if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
+                    {
+                        for _, i in enum_info.names
+                        {
+                            name  := enum_info.names[i]
+                            value := enum_info.values[i]
+                            state := T(value) in flags
+                            mu.checkbox(mu_ctx, name, &state)
+                            if state 
+                            {
+                                incl(flags, T(value))
+                            }
+                            else
+                            {
+                                excl(flags, T(value))
+                            }
+                        }
+                    }
+                }
+            }
+
+            mu_enum_selection :: proc(mu_ctx: ^mu.Context, $T: typeid) -> (changed: bool, result: T)
+            {
+                type_info := type_info_of(T)
+                if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
+                {
+                    if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
+                    {
+                        for _, i in enum_info.names
+                        {
+                            name  := enum_info.names[i]
+                            value := enum_info.values[i]
+                            if .SUBMIT in mu.button(mu_ctx, name)
+                            {
+                                return true, T(value)
+                            }
+                        }
+                    }
+                }
+
+                return false, T{}
+            }
+
+            mu.checkbox(&mu_ctx, "Pause Animations", &pause_animations)
+
             if .ACTIVE in mu.header(&mu_ctx, "View Mode")
             {
-                if .SUBMIT in mu.button(&mu_ctx, "Lit")     do view_mode = .LIT
-                if .SUBMIT in mu.button(&mu_ctx, "Depth")   do view_mode = .DEPTH
-                if .SUBMIT in mu.button(&mu_ctx, "Normals") do view_mode = .NORMALS
+                if changed, value := mu_enum_selection(&mu_ctx, View_Mode); changed
+                {
+                    view_mode = value
+                }
+            }
+
+            if .ACTIVE in mu.header(&mu_ctx, "Show Flags")
+            {
+                mu_flags(&mu_ctx, &show_flags)
+            }
+
+            if .DRAW_BVH in show_flags
+            {
+                if .ACTIVE in mu.header(&mu_ctx, "Draw BVH")
+                {
+                    mu.label(&mu_ctx, "Show Depth")
+                    mu_slider_int(&mu_ctx, &draw_bvh_args.show_depth, -1, bvh_max_depth - 1)
+                }
             }
 
             mu.label(&mu_ctx, "fov")
             mu.slider(&mu_ctx, &fov, 45.0, 100.0)
+
+            if len(debug_ray_info.nodes_tried) != 0
+            {
+                mu.text(&mu_ctx, fmt.tprint("Debug Ray Primitive: %v", debug_ray_primitive))
+                for node_index in debug_ray_info.nodes_tried
+                {
+                    type := "missed"
+
+                    not_present := false
+                    if debug_ray_info.closest_hit_node == node_index
+                    {
+                        type = "leaf"
+                    }
+                    else if slice.contains(debug_ray_info.nodes_hit[:], node_index)
+                    {
+                        type = "hit"
+                    }
+                    else if slice.contains(debug_ray_info.nodes_missed[:], node_index)
+                    {
+                        type = "missed"
+                    }
+                    else
+                    {
+                        not_present = true
+                    }
+
+                    if !not_present
+                    {
+                        node := &scene.bvh.nodes[node_index]
+                        mu.text(&mu_ctx, fmt.tprint("Node (%v): %v", type, node))
+                    }
+                }
+            }
+            else if lmb_down
+            {
+                mu.text(&mu_ctx, "Debug Ray Primitive: None")
+            }
         }
 
         mu.end(&mu_ctx)
@@ -320,16 +492,16 @@ main :: proc()
         // update scene
         //
 
-        moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
+        // moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
 
         //
         // dispatch new frame
         //
 
         origin := Vector3{ 
-            50.0*math.cos(0.1*running_time), 
-            20.0 + 2.5*math.cos(0.17*running_time), 
-            50.0*math.sin(0.1*running_time),
+            f32(50.0*math.cos(0.1*running_time)),
+            f32(60.0 + 20.0*math.cos(0.17*running_time)), 
+            f32(50.0*math.sin(0.1*running_time)),
         }
         target    := Vector3{ 0.0, 15.0, 0.0 }
         direction := target - origin
@@ -347,6 +519,8 @@ main :: proc()
             view_mode  = view_mode,
             show_flags = show_flags,
         }
+
+        last_camera = view.camera
 
         if can_dispatch_frame(&rcx)
         {
@@ -416,25 +590,78 @@ main :: proc()
             draw_line(line_renderer, color, p010, p011)
         }
 
-        draw_bvh :: proc(using line_renderer: ^Line_Renderer, bvh: ^BVH)
+        if .DRAW_BVH in show_flags || len(debug_ray_info.nodes_tried) > 0
         {
-            visitor :: proc(bvh: ^BVH, node: ^BVH_Node, userdata: rawptr)
+            if len(debug_ray_info.nodes_tried) > 0
             {
-                line_renderer := (^Line_Renderer)(userdata)
-                p, r := rect3_get_position_radius(node.bounds)
-                draw_line(line_renderer, Vector3{1, 0, 0}, p, r)
+                for node_index in debug_ray_info.nodes_tried
+                {
+                    missed_color :: Vector3{1, 0, 0}
+                    hit_color    :: Vector3{0, 1, 0}
+                    leaf_color   :: Vector3{0, 0, 1}
+
+                    not_present := false
+                    color := Vector3{0, 0, 0}
+
+                    if debug_ray_info.closest_hit_node == node_index
+                    {
+                        color = leaf_color
+                    }
+                    else if slice.contains(debug_ray_info.nodes_hit[:], node_index)
+                    {
+                        color = hit_color
+                    }
+                    else if slice.contains(debug_ray_info.nodes_missed[:], node_index)
+                    {
+                        color = missed_color
+                    }
+                    else
+                    {
+                        not_present = true
+                    }
+
+                    if !not_present
+                    {
+                        node := &scene.bvh.nodes[node_index]
+                        p, r := rect3_get_position_radius(node.bounds)
+                        draw_box(&line_renderer, color, p, r)
+                    }
+                }
             }
+            else
+            {
+                My_Args :: struct
+                {
+                    line_renderer  : ^Line_Renderer,
+                    draw_args      : ^Draw_BVH_Args,
+                    debug_ray_info : ^Ray_Debug_Info,
+                }
 
-            visit_bvh(bvh, visitor, line_renderer)
+                my_args := My_Args{ &line_renderer, &draw_bvh_args, &debug_ray_info }
+
+                visit_bvh(&scene.bvh, &my_args, proc(args: BVH_Visitor_Args)
+                {
+                    using my_args := (^My_Args)(args.userdata)
+
+                    {
+                        max_depth := 10
+                        if draw_args.show_depth == -1 || draw_args.show_depth == args.depth
+                        {
+                            color := debug_color(args.depth)
+
+                            p, r := rect3_get_position_radius(args.node.bounds)
+                            draw_box(line_renderer, color, p, r)
+                        }
+                    }
+                })
+            }
         }
 
-        draw_bvh(&line_renderer, &bvh)
-
-        for box in scene.boxes
-        {
-            material := get_material(&scene, box.material)
-            draw_box(&line_renderer, material.albedo, box.p, box.r)
-        }
+        // for box in scene.boxes
+        // {
+        //     material := get_material(&scene, box.material)
+        //     draw_box(&line_renderer, material.albedo, box.p, box.r)
+        // }
 
         //
         // render ui
@@ -508,10 +735,15 @@ main :: proc()
         // end of loop guff
         //
 
-        running_time += dt
+        if !pause_animations
+        {
+            running_time += f64(dt)
+        }
 
         dt_hires := time.tick_lap_time(&now)
         dt = math.min(1.0 / 15.0, f32(time.duration_seconds(dt_hires)))
+
+        free_all(context.temp_allocator)
 
         if quit
         {

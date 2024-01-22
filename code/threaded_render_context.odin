@@ -217,6 +217,8 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             render_tile(params, render_target, tile_x0, tile_x1, tile_y0, tile_y1)
             clocks_end := x86._rdtsc()
 
+            free_all(context.temp_allocator)
+
             clocks_spent += clocks_end - clocks_start
 
             retired_tile_count := intrinsics.atomic_add(&frame.retired_tile_count, 1) + 1

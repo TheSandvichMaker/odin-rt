@@ -32,6 +32,22 @@ BVH_Node :: struct
 
 #assert(size_of(BVH_Node) == 32)
 
+BVH_Visit_Info :: struct
+{
+    index      : u32,
+    parent     : ^BVH_Node,
+    sibling    : ^BVH_Node,
+    depth      : int,
+}
+
+BVH_Visitor_Args :: struct
+{
+    using info : ^BVH_Visit_Info,
+    bvh        : ^BVH,
+    node       : ^BVH_Node,
+    userdata   : rawptr,
+}
+
 BVH :: struct
 {
     nodes: []BVH_Node,
@@ -86,27 +102,64 @@ build_bvh :: proc {
     build_bvh_from_input,
 }
 
-visit_bvh :: proc(bvh: ^BVH, $visitor: proc(bvh: ^BVH, node: ^BVH_Node, userdata: rawptr), userdata: rawptr = nil)
+// NOT MEANT FOR PERFORMANT ITERATION, this is just convenience for doing BVH related operations.
+// Also this sucks bro... get me an iterator...
+visit_bvh :: proc(bvh: ^BVH, userdata: rawptr, visitor: proc(args: BVH_Visitor_Args))
 {
-    stack: sm.Small_Array(32, u32)
-
-    sm.push_back(&stack, 0)
+    stack: sm.Small_Array(32, BVH_Visit_Info)
+    sm.push_back(&stack, BVH_Visit_Info{depth = 0})
 
     for sm.len(stack) > 0
     {
-        node_index := sm.pop_back(&stack)
-        node := &bvh.nodes[node_index]
+        info := sm.pop_back(&stack)
+        node := &bvh.nodes[info.index]
 
-        visitor(bvh, node, userdata)
+        args := BVH_Visitor_Args{
+            info     = &info,
+            bvh      = bvh,
+            node     = node,
+            userdata = userdata,
+        }
+        visitor(args)
 
         if node.count == 0
         {
             left  := node.left_or_first
             right := left + 1
-            sm.push_back(&stack, left)
-            sm.push_back(&stack, right)
+            sm.push_back(&stack, BVH_Visit_Info{
+                index   = left,
+                depth   = info.depth + 1, 
+                parent  = node, 
+                sibling = &bvh.nodes[right],
+            })
+            sm.push_back(&stack, BVH_Visit_Info{
+                index   = right,
+                depth   = info.depth + 1, 
+                parent  = node, 
+                sibling = &bvh.nodes[left],
+            })
         }
     }
+}
+
+find_bvh_max_depth :: proc(bvh: ^BVH) -> int
+{
+    result: int = 0
+
+    visit_bvh(bvh, &result, proc(args: BVH_Visitor_Args)
+    {
+        result_ptr := (^int)(args.userdata)
+        result     := result_ptr^
+
+        if args.depth > result
+        {
+            result = args.depth
+        }
+
+        result_ptr ^= result
+    })
+
+    return result
 }
 
 @(private="file")
@@ -283,5 +336,45 @@ debug_print_pivots :: proc(builder: ^BVH_Builder, parent_bounds: Rect3, split_ax
     }
 
     partition_count += 1
+}
+
+test_bvh_reachability :: proc(bvh: ^BVH, entry_count: int) -> bool
+{
+    temp_scoped()
+
+    indices_touched := make([]bool, entry_count, allocator=context.temp_allocator)
+
+    visit_bvh(bvh, &indices_touched, proc(args: BVH_Visitor_Args) 
+    {
+        bvh      := args.bvh
+        node     := args.node
+        userdata := args.userdata
+
+        if node.count > 0
+        {
+            indices_touched := (^[]bool)(userdata)^
+            
+            first := node.left_or_first
+            count := node.count
+
+            for i := first; i < first + count; i += 1
+            {
+                indices_touched[i] = true
+            }
+        }
+    })
+
+    visited_all := true
+
+    for was_touched in indices_touched
+    {
+        if !was_touched
+        {
+            visited_all = false
+            break
+        }
+    }
+
+    return visited_all
 }
 

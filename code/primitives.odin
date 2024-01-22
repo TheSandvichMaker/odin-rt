@@ -106,18 +106,16 @@ intersect_plane :: proc "contextless" (plane: ^Plane, using ray: Ray) -> (hit: b
 }
 
 @(require_results)
-intersect_box_simple :: #force_no_inline proc "contextless" (ray: Ray, p: Vector3, r: Vector3) -> (hit: bool, t: f32)
+intersect_box_simple :: #force_no_inline proc "contextless" (ray: Ray, box_min: Vector3, box_max: Vector3) -> (hit: bool, t: f32)
 {
-    m  := ray.rd_inv
-    n  := m*(ray.ro - p)
-    k  := component_abs(m)*r
-    t1 := -n - k
-    t2 := -n + k
-    tn := max3(t1)
-    tf := min3(t2)
+    t1 := ray.rd_inv*(box_min - ray.ro)
+    t2 := ray.rd_inv*(box_max - ray.ro)
 
-    t   = tn
-    hit = t >= ray.t_min && tf >= tn
+    tn := max3(component_min(t1, t2))
+    tf := min3(component_max(t1, t2))
+
+    t   = tn >= 0.0 ? tn : tf
+    hit = tf >= tn && t >= ray.t_min && t < ray.t_max
 
     return hit, t
 }
@@ -179,6 +177,22 @@ intersect_box :: #force_no_inline proc "contextless" (box: ^Box, r: Ray) -> (hit
             t   = tn
             hit = t >= r.t_min && tf >= tn
         }
+    }
+
+    return hit, t
+}
+
+@(require_results)
+intersect_primitive :: proc "contextless" (primitive: ^Primitive, ray: Ray) -> (hit: bool, t: f32)
+{
+    switch primitive.kind
+    {
+        case .SPHERE:
+            hit, t = intersect_sphere((^Sphere)(primitive), ray)
+        case .PLANE:
+            hit, t = intersect_plane((^Plane)(primitive), ray)
+        case .BOX:
+            hit, t = intersect_box((^Box)(primitive), ray)
     }
 
     return hit, t

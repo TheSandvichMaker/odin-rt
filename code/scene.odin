@@ -1,6 +1,8 @@
 package rt
 
 import "core:math"
+import "core:slice"
+import sm "core:container/small_array"
 
 Directional_Light :: struct
 {
@@ -15,11 +17,13 @@ Scene :: struct
 
     // Probably that will just involve sending over a per-frame TLAS
 
-    sun       : Directional_Light,
-    materials : [dynamic]Material,
-    spheres   : [dynamic]Sphere,
-    planes    : [dynamic]Plane,
-    boxes     : [dynamic]Box,
+    sun        : Directional_Light,
+    materials  : [dynamic]Material,
+    spheres    : [dynamic]Sphere,
+    planes     : [dynamic]Plane,
+    boxes      : [dynamic]Box,
+    bvh        : BVH, // TODO: figure this out
+    primitives : [dynamic]Primitive_Holder,
 }
 
 copy_into_array :: proc(dst: ^[dynamic]$T, src: []T)
@@ -32,10 +36,12 @@ deep_copy_scene :: proc(dst: ^Scene, src: ^Scene)
 {
     dst.sun = src.sun
 
-    copy_into_array(&dst.materials, src.materials[:])
-    copy_into_array(&dst.spheres,   src.spheres[:])
-    copy_into_array(&dst.planes,    src.planes[:])
-    copy_into_array(&dst.boxes,     src.boxes[:])
+    copy_into_array(&dst.materials,  src.materials[:])
+    copy_into_array(&dst.spheres,    src.spheres[:])
+    copy_into_array(&dst.planes,     src.planes[:])
+    copy_into_array(&dst.boxes,      src.boxes[:])
+    dst.bvh = src.bvh // TODO: figure this out
+    dst.primitives = src.primitives
 }
 
 add_material :: proc(scene: ^Scene, material: Material) -> Material_Index
@@ -85,6 +91,107 @@ add_box :: proc(scene: ^Scene, box: Box) -> ^Box
     return result
 }
 
+Ray_Debug_Info :: struct
+{
+    nodes_tried          : [dynamic]u32,
+    nodes_hit            : [dynamic]u32,
+    nodes_missed         : [dynamic]u32,
+    closest_hit_node     : u32,
+}
+
+@(require_results)
+intersect_scene_accelerated_impl :: proc(scene: ^Scene, 
+                                         ray: Ray, 
+                                         $EARLY_OUT: bool, 
+                                         $WRITE_DEBUG_INFO: bool, 
+                                         debug: ^Ray_Debug_Info) -> (result: ^Primitive, t: f32)
+{
+    stack: sm.Small_Array(32, u32)
+    sm.push_back(&stack, 0)
+
+    ray := ray
+    t = ray.t_max
+
+    for sm.len(stack) > 0
+    {
+        node_index := sm.pop_back(&stack)
+        node := &scene.bvh.nodes[node_index]
+
+        when WRITE_DEBUG_INFO
+        {
+            append(&debug.nodes_tried, node_index)
+        }
+
+        if ok, _ := intersect_box_simple(ray, node.bounds.min, node.bounds.max); ok
+        {
+            when WRITE_DEBUG_INFO
+            {
+                append(&debug.nodes_hit, node_index)
+            }
+
+            if node.count > 0
+            {
+                first := node.left_or_first
+                count := node.count
+
+                for i := first; i < first + count; i += 1
+                {
+                    holder := &scene.primitives[i]
+                    primitive := &holder.primitive
+
+                    hit, hit_t := intersect_primitive(primitive, ray)
+
+                    if hit && hit_t <= t
+                    {
+                        result    = primitive
+                        t         = hit_t
+                        ray.t_max = t
+
+                        when WRITE_DEBUG_INFO
+                        {
+                            debug.closest_hit_node = node_index
+                        }
+
+                        when EARLY_OUT
+                        {
+                            return result, t
+                        }
+                    }
+                }
+            }
+            else
+            {
+                left  := node.left_or_first
+                right := left + 1
+                sm.push_back(&stack, left)
+                sm.push_back(&stack, right)
+            }
+        }
+        else
+        {
+            when WRITE_DEBUG_INFO
+            {
+                append(&debug.nodes_missed, node_index)
+            }
+        }
+    }
+
+    return result, t
+}
+
+@(require_results)
+intersect_scene_accelerated :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
+{
+    return intersect_scene_accelerated_impl(scene, ray, false, false, nil)
+}
+
+@(require_results)
+intersect_scene_shadow_accelerated :: proc(scene: ^Scene, ray: Ray) -> bool
+{
+    primitive, t := intersect_scene_accelerated_impl(scene, ray, true, false, nil)
+    return primitive != nil
+}
+
 @(require_results)
 intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Primitive, f32)
 {
@@ -124,7 +231,9 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 
     for &box, box_index in scene.boxes
     {
-        hit, hit_t := intersect_box(&box, ray)
+        min := box.p - box.r
+        max := box.p + box.r
+        hit, hit_t := intersect_box_simple(ray, min, max)
         if hit && hit_t < t
         {
             result = &box

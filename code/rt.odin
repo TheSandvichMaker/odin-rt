@@ -81,6 +81,14 @@ make_ray :: proc "contextless" (ro: Vector3, rd: Vector3, t_min: f32 = 0.001, t_
 }
 
 @(require_results)
+ray_from_camera_uv :: proc "contextless" (camera: Cached_Camera, uv: Vector2, t_min: f32 = 0.001, t_max: f32 = math.F32_MAX) -> Ray
+{
+    ndc := 2.0*uv - 1.0
+    ray := ray_from_camera(camera, ndc, t_min, t_max)
+    return ray
+}
+
+@(require_results)
 ray_from_camera :: proc "contextless" (camera: Cached_Camera, ndc: Vector2, t_min, t_max: f32) -> Ray
 {
     x := camera.x
@@ -124,6 +132,7 @@ Accumulation_Buffer :: struct
 
 View_Mode :: enum
 {
+    BLANK,
     LIT,
     DEPTH,
     NORMALS,
@@ -131,6 +140,7 @@ View_Mode :: enum
 
 Show_Flags :: enum
 {
+    DRAW_BVH,
 }
 
 Show_Flags_Set :: bit_set[Show_Flags]
@@ -147,15 +157,6 @@ Render_Params :: struct
 {
     using view: View,
     frame_index : u64,
-}
-
-frame_debug_color :: proc(frame_index: u64) -> (result: Vector3)
-{
-    bits := (frame_index % 6) + 1
-    result.x = (bits & 0x1) != 0 ? 1.0 : 0.0
-    result.y = (bits & 0x2) != 0 ? 1.0 : 0.0
-    result.z = (bits & 0x4) != 0 ? 1.0 : 0.0
-    return result
 }
 
 render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x1_, y0_, y1_: int)
@@ -195,6 +196,8 @@ render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
 
     switch view_mode
     {
+    case .BLANK:
+        /* ... */
     case .LIT:
         color = shade_ray(scene, ray)
     case .DEPTH:
@@ -247,7 +250,8 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 
     sun := scene.sun
 
-    primitive, t := intersect_scene(scene, ray)
+    // primitive, t := intersect_scene(scene, ray)
+    primitive, t := intersect_scene_accelerated(scene, ray)
     if primitive != nil
     {
         color = Vector3{0.0, 0.0, 0.0}
@@ -262,7 +266,8 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
         if n_dot_l > 0.0
         {
             shadow_ray := make_ray(p + 0.0001*n, sun.d, t_min, t_max)
-            in_shadow := intersect_scene_shadow(scene, shadow_ray)
+            // in_shadow := intersect_scene_shadow(scene, shadow_ray)
+            in_shadow := intersect_scene_shadow_accelerated(scene, shadow_ray)
 
             if !in_shadow
             {
