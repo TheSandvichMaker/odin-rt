@@ -41,7 +41,7 @@ BVH_Visit_Info :: struct
 
 BVH_Visitor_Args :: struct
 {
-    using info : ^BVH_Visit_Info,
+    using info : BVH_Visit_Info,
     bvh        : ^BVH,
     node       : ^BVH_Node,
     userdata   : rawptr,
@@ -122,7 +122,7 @@ visit_bvh :: proc(bvh: ^BVH, userdata: rawptr, visitor: proc(args: BVH_Visitor_A
         node := &bvh.nodes[info.index]
 
         args := BVH_Visitor_Args{
-            info     = &info,
+            info     = info,
             bvh      = bvh,
             node     = node,
             userdata = userdata,

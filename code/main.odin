@@ -319,7 +319,7 @@ main :: proc()
             }
         }
 
-        mu_has_mouse := mu_ctx.hover_id != 0
+        mu_has_mouse := mu_ctx.hover_id != 0 || mu_ctx.focus_id != 0
 
         debug_ray_primitive: ^Primitive
         debug_ray_t: f32
@@ -413,7 +413,7 @@ main :: proc()
                 if .ACTIVE in mu.header(&mu_ctx, "Draw BVH")
                 {
                     mu.label(&mu_ctx, "Show Depth")
-                    mu_slider_int(&mu_ctx, &draw_bvh_args.show_depth, -1, bvh_max_depth - 1)
+                    mu_slider_int(&mu_ctx, &draw_bvh_args.show_depth, -1, bvh_max_depth)
                 }
             }
 
@@ -452,7 +452,7 @@ main :: proc()
                     }
                 }
             }
-            else if lmb_down
+            else if lmb_down && !mu_has_mouse
             {
                 mu.text(&mu_ctx, "Debug Ray Primitive: None")
             }
@@ -630,30 +630,28 @@ main :: proc()
             }
             else
             {
-                My_Args :: struct
+                visited: [dynamic]BVH_Visitor_Args
+                visited.allocator = context.temp_allocator
+
+                visit_bvh(&scene.bvh, &visited, proc(args: BVH_Visitor_Args)
                 {
-                    line_renderer  : ^Line_Renderer,
-                    draw_args      : ^Draw_BVH_Args,
-                    debug_ray_info : ^Ray_Debug_Info,
-                }
-
-                my_args := My_Args{ &line_renderer, &draw_bvh_args, &debug_ray_info }
-
-                visit_bvh(&scene.bvh, &my_args, proc(args: BVH_Visitor_Args)
-                {
-                    using my_args := (^My_Args)(args.userdata)
-
-                    {
-                        max_depth := 10
-                        if draw_args.show_depth == -1 || draw_args.show_depth == args.depth
-                        {
-                            color := debug_color(args.depth)
-
-                            p, r := rect3_get_position_radius(args.node.bounds)
-                            draw_box(line_renderer, color, p, r)
-                        }
-                    }
+                    visited := (^[dynamic]BVH_Visitor_Args)(args.userdata)
+                    append(visited, args)
                 })
+
+                #reverse for args in visited
+                {
+                    node := args.node
+
+                    max_depth := 10
+                    if draw_bvh_args.show_depth == -1 || draw_bvh_args.show_depth == args.depth
+                    {
+                        color := debug_color(args.depth)
+
+                        p, r := rect3_get_position_radius(node.bounds)
+                        draw_box(&line_renderer, color, p, r)
+                    }
+                }
             }
         }
 
