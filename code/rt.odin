@@ -250,8 +250,7 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
 
     sun := scene.sun
 
-    // primitive, t := intersect_scene(scene, ray)
-    primitive, t := intersect_scene_accelerated(scene, ray)
+    primitive, t := intersect_scene(scene, ray)
     if primitive != nil
     {
         color = Vector3{0.0, 0.0, 0.0}
@@ -266,8 +265,7 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
         if n_dot_l > 0.0
         {
             shadow_ray := make_ray(p + 0.0001*n, sun.d, t_min, t_max)
-            // in_shadow := intersect_scene_shadow(scene, shadow_ray)
-            in_shadow := intersect_scene_shadow_accelerated(scene, shadow_ray)
+            in_shadow := intersect_scene_shadow(scene, shadow_ray)
 
             if !in_shadow
             {

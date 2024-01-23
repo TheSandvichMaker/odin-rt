@@ -106,6 +106,8 @@ intersect_scene_accelerated_impl :: proc(scene: ^Scene,
                                          $WRITE_DEBUG_INFO: bool, 
                                          debug: ^Ray_Debug_Info) -> (result: ^Primitive, t: f32)
 {
+    bvh := &scene.bvh
+
     stack: sm.Small_Array(32, u32)
     sm.push_back(&stack, 0)
 
@@ -115,7 +117,7 @@ intersect_scene_accelerated_impl :: proc(scene: ^Scene,
     for sm.len(stack) > 0
     {
         node_index := sm.pop_back(&stack)
-        node := &scene.bvh.nodes[node_index]
+        node := &bvh.nodes[node_index]
 
         when WRITE_DEBUG_INFO
         {
@@ -136,8 +138,9 @@ intersect_scene_accelerated_impl :: proc(scene: ^Scene,
 
                 for i := first; i < first + count; i += 1
                 {
-                    holder := &scene.primitives[i]
-                    primitive := &holder.primitive
+                    primitive_index := bvh.indices[i]
+                    holder          := &scene.primitives[primitive_index]
+                    primitive       := &holder.primitive
 
                     hit, hit_t := intersect_primitive(primitive, ray)
 
@@ -176,24 +179,41 @@ intersect_scene_accelerated_impl :: proc(scene: ^Scene,
         }
     }
 
+    // do planes as well...
+    for &plane, plane_index in scene.planes
+    {
+        hit, hit_t := intersect_plane(&plane, ray)
+        if hit && hit_t < t
+        {
+            result = &plane
+            t      = hit_t
+
+            when EARLY_OUT
+            {
+                return result, t
+            }
+        }
+    }
+
+
     return result, t
 }
 
 @(require_results)
-intersect_scene_accelerated :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
+intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
 {
     return intersect_scene_accelerated_impl(scene, ray, false, false, nil)
 }
 
 @(require_results)
-intersect_scene_shadow_accelerated :: proc(scene: ^Scene, ray: Ray) -> bool
+intersect_scene_shadow :: proc(scene: ^Scene, ray: Ray) -> bool
 {
     primitive, t := intersect_scene_accelerated_impl(scene, ray, true, false, nil)
     return primitive != nil
 }
 
 @(require_results)
-intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Primitive, f32)
+intersect_scene_brute_force_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Primitive, f32)
 {
     result: ^Primitive
 
@@ -250,14 +270,14 @@ intersect_scene_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bool) -> (^Pri
 }
 
 @(require_results)
-intersect_scene :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
+intersect_scene_brute_force :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
 {
-    return intersect_scene_impl(scene, ray, false)
+    return intersect_scene_brute_force_impl(scene, ray, false)
 }
 
 @(require_results)
-intersect_scene_shadow :: proc(scene: ^Scene, ray: Ray) -> bool
+intersect_scene_shadow_brute_force :: proc(scene: ^Scene, ray: Ray) -> bool
 {
-    primitive, t := intersect_scene_impl(scene, ray, true)
+    primitive, t := intersect_scene_brute_force_impl(scene, ray, true)
     return primitive != nil
 }

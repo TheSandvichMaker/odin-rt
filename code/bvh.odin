@@ -6,20 +6,19 @@ import "core:slice"
 import "core:intrinsics"
 import sm "core:container/small_array"
 
-BVH_TARGET_LEAF_COUNT  :: 8
+BVH_TARGET_LEAF_COUNT  :: 4
 BVH_DEBUG_PARTITIONING :: false
 
 BVH_Builder_Input :: struct
 {
-    indices : []u32,
     bounds  : []Rect3,
 }
 
 BVH_Builder :: struct
 {
-    bvh: ^BVH,
     node_count  : u32,
     nodes       : []BVH_Node, 
+    indices     : []u32,
     using input : BVH_Builder_Input,
 }
 
@@ -50,24 +49,25 @@ BVH_Visitor_Args :: struct
 
 BVH :: struct
 {
-    nodes: []BVH_Node,
+    indices : []u32,
+    nodes   : []BVH_Node,
 }
 
 build_bvh_from_primitives :: proc(primitives: []Primitive_Holder, allocator := context.allocator) -> BVH
 {
+    if len(primitives) == 0 do return BVH{}
+
     temp_scoped()
 
     primitive_count := len(primitives)
 
     input: BVH_Builder_Input = {
         bounds  = make([]Rect3, primitive_count, context.temp_allocator),
-        indices = make([]u32,   primitive_count, context.temp_allocator),
     }
 
     for i := 0; i < primitive_count; i += 1
     {
-        #no_bounds_check input.indices[i] = u32(i)
-        #no_bounds_check input.bounds [i] = find_primitive_bounds(&primitives[i].primitive)
+        #no_bounds_check input.bounds[i] = find_primitive_bounds(&primitives[i].primitive)
     }
 
     bvh := build_bvh_from_input(input, allocator)
@@ -77,22 +77,29 @@ build_bvh_from_primitives :: proc(primitives: []Primitive_Holder, allocator := c
 
 build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allocator) -> BVH
 {
-    primitive_count := len(input.indices)
-    assert(len(input.bounds) == primitive_count)
-
-    bvh: BVH
+    primitive_count := len(input.bounds)
+    if primitive_count == 0 do return BVH{}
 
     nodes, _ := mem.make_aligned([]BVH_Node, 2*primitive_count, 64, allocator)
+    indices  := make([]u32, primitive_count, allocator)
+
+    for _, i in indices
+    {
+        #no_bounds_check indices[i] = u32(i)
+    }
 
     builder: BVH_Builder = {
-        bvh        = &bvh,
         node_count = 2,
         nodes      = nodes,
+        indices    = indices,
         input      = input,
     }
 
     build_bvh_recursively(&builder, &builder.nodes[0], 0, u32(primitive_count))
-    bvh.nodes = builder.nodes[:builder.node_count]
+
+    bvh: BVH
+    bvh.nodes   = builder.nodes[:builder.node_count]
+    bvh.indices = builder.indices
 
     return bvh
 }

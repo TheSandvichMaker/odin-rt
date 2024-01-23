@@ -152,7 +152,7 @@ main :: proc()
     sun.color = Vector3{1.0, 1.0, 1.0}
 
     {
-        material := add_material(&scene, { albedo = { 1.0, 0.5, 0.2 }, reflectiveness = 0.25 })
+        material := add_material(&scene, { albedo = { 1.0, 0.5, 0.2 }, reflectiveness = 0.5 })
         add_plane(&scene, { p = { 0.0, 0.0, 0.0 }, n = { 0.0, 1.0, 0.0 }, material = material })
     }
 
@@ -170,7 +170,7 @@ main :: proc()
     */
 
     {
-        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 0.0 })
+        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 1.0 })
 
         spacing := f32(20.0)
 
@@ -179,16 +179,16 @@ main :: proc()
             for x := -3; x <= 3; x += 1
             {
                 p := Vector3{ f32(x)*spacing, 10.0, f32(y)*spacing }
-                add_box(&scene, { p = p, r = 7.5, material = material })
+                add_sphere(&scene, { p = p, r = 7.5, material = material })
             }
         }
     }
 
     primitives: [dynamic]Primitive_Holder
 
-    for box in scene.boxes
+    for sphere in scene.spheres
     {
-        append(&primitives, Primitive_Holder{ box = box })
+        append(&primitives, Primitive_Holder{ sphere = sphere })
     }
 
     // TODO: figure it out!
@@ -422,7 +422,7 @@ main :: proc()
 
             if len(debug_ray_info.nodes_tried) != 0
             {
-                mu.text(&mu_ctx, fmt.tprint("Debug Ray Primitive: %v", debug_ray_primitive))
+                mu.text(&mu_ctx, fmt.tprintf("Debug Ray Primitive: %v", debug_ray_primitive))
                 for node_index in debug_ray_info.nodes_tried
                 {
                     type := "missed"
@@ -448,7 +448,7 @@ main :: proc()
                     if !not_present
                     {
                         node := &scene.bvh.nodes[node_index]
-                        mu.text(&mu_ctx, fmt.tprint("Node (%v): %v", type, node))
+                        mu.text(&mu_ctx, fmt.tprintf("Node (%v): %v", type, node))
                     }
                 }
             }
@@ -499,9 +499,9 @@ main :: proc()
         //
 
         origin := Vector3{ 
-            f32(50.0*math.cos(0.1*running_time)),
+            f32(100.0*math.cos(0.1*running_time)),
             f32(60.0 + 20.0*math.cos(0.17*running_time)), 
-            f32(50.0*math.sin(0.1*running_time)),
+            f32(100.0*math.sin(0.1*running_time)),
         }
         target    := Vector3{ 0.0, 15.0, 0.0 }
         direction := target - origin
