@@ -40,6 +40,34 @@ import sm "core:container/small_array"
 import sdl "vendor:sdl2"
 import mu "vendor:microui"
 
+Picture_State :: enum
+{
+    None,
+
+    Queued,
+    In_Progress,
+    Rendered,
+    Processed,
+}
+
+SDL_Picture :: struct
+{
+    surface: ^sdl.Surface,
+    texture: ^sdl.Texture,
+}
+
+Picture :: struct
+{
+    using render_target: Render_Target,
+
+    state: Picture_State,
+
+    file_name: String_Storage(1024),
+    spp      : int,
+
+    using _sdl: SDL_Picture,
+}
+
 mu_button_map: []mu.Mouse = {
     sdl.BUTTON_LEFT   = mu.Mouse.LEFT,
     sdl.BUTTON_MIDDLE = mu.Mouse.MIDDLE,
@@ -100,12 +128,16 @@ Picture_Request :: struct
 
 default_picture_request :: proc(w, h: int) -> Picture_Request
 {
+    @(thread_local)
+    next_image_index: int
+
     result: Picture_Request = {
         w   = w,
         h   = h,
         spp = 128,
     }
-    copy_string_into_storage(&result.file_name, "odin_rt_render.png")
+    copy_string_into_storage(&result.file_name, fmt.tprintf("image %v.png", next_image_index))
+    next_image_index += 1
     return result
 }
 
@@ -134,6 +166,7 @@ Editor_State :: struct
     picture_in_progress        : ^Picture,
     picture_shown_timer        : f64,
     picture_being_shown        : ^Picture,
+    hovered_picture            : ^Picture,
     pictures                   : [dynamic]^Picture,
 }
 
@@ -179,39 +212,43 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
     mu.label(ctx, "fov")
     mu.slider(ctx, &editor.fov, 45.0, 100.0)
 
-    if editor.picture_in_progress == nil
+    request := &editor.picture_request
+
+    mu.label(ctx, "Render Resolution W:")
+    mu_number_int(ctx, &request.w)
+    request.w = math.clamp(request.w, 1, 8192)
+
+    mu.label(ctx, "Render Resolution H:")
+    mu_number_int(ctx, &request.h)
+    request.h = math.clamp(request.h, 1, 8192)
+
+    mu.label(ctx, "Render Samples Per Pixel:")
+    mu_number_int(ctx, &request.spp)
+    request.spp = math.clamp(request.spp, 1, 8192)
+
+    if .SUBMIT in mu.button(ctx, "Take Picture")
     {
-        request := &editor.picture_request
-
-        mu.label(ctx, "Render Resolution W:")
-        mu_number_int(ctx, &request.w)
-        request.w = math.clamp(request.w, 1, 8192)
-
-        mu.label(ctx, "Render Resolution H:")
-        mu_number_int(ctx, &request.h)
-        request.h = math.clamp(request.h, 1, 8192)
-
-        mu.label(ctx, "Render Samples Per Pixel:")
-        mu_number_int(ctx, &request.spp)
-        request.spp = math.clamp(request.spp, 1, 8192)
-
-        if .SUBMIT in mu.button(ctx, "Take Picture")
+        if sm.space(editor.submitted_picture_requests) > 0
         {
-            if sm.space(editor.submitted_picture_requests) > 0
-            {
-                sm.append(&editor.submitted_picture_requests, request^)
-                request ^= default_picture_request(editor.window_w, editor.window_h)
-            }
+            sm.append(&editor.submitted_picture_requests, request^)
+            request ^= default_picture_request(editor.window_w, editor.window_h)
         }
     }
-    else
+
+    editor.hovered_picture = nil
+
+    if .ACTIVE in mu.header(ctx, "Pictures")
     {
-        picture := editor.picture_in_progress
-        if editor.picture_shown_timer <= 0.0 && intrinsics.atomic_load(&picture.state) == .Done
+        for picture, index in editor.pictures
         {
-            editor.picture_being_shown = picture
-            editor.picture_in_progress = nil
-            editor.picture_shown_timer = 4.0
+            file_name := string_from_storage(&picture.file_name)
+            mu.push_id(ctx, uintptr(index))
+            mu.button(ctx, file_name)
+            if ctx.hover_id == ctx.last_id
+            {
+                editor.hovered_picture = picture
+            }
+            mu.pop_id(ctx)
         }
     }
 
@@ -263,6 +300,17 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
         mu.text(ctx, "Debug Ray Primitive: None")
     }
     }
+}
+
+create_sdl_texture :: proc(renderer: ^sdl.Renderer, w: int, h: int, pixels: []Color_RGBA) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
+{
+    surface = sdl.CreateRGBSurfaceWithFormat(0, i32(w), i32(h), 
+                                             32, cast(u32)sdl.PixelFormatEnum.RGBA8888)
+
+    copy(([^]Color_RGBA)(surface.pixels)[:w*h], pixels)
+
+    texture = sdl.CreateTextureFromSurface(renderer, surface)
+    return surface, texture
 }
 
 main :: proc()
@@ -566,16 +614,31 @@ main :: proc()
             sdl.UnlockTexture(texture)
         }
 
-        picture := editor.picture_in_progress
-        if picture == nil do picture = editor.picture_being_shown
+        if picture := editor.picture_in_progress; picture != nil
+        {
+            if intrinsics.atomic_load(&picture.state) == .Rendered
+            {
+                editor.picture_being_shown = picture
+                editor.picture_in_progress = nil
+                editor.picture_shown_timer = 4.0
 
-        if picture != nil
+                picture.surface, picture.texture = create_sdl_texture(renderer, picture.w, picture.h, picture.pixels)
+
+                if intrinsics.atomic_compare_exchange_strong(&picture.state, .Rendered, .Processed) != .Rendered
+                {
+                    panic("Someone wrote really bad threading code.")
+                }
+            }
+        }
+
+        
+        if picture := editor.picture_in_progress; picture != nil
         {
             dst := lock_texture(backbuffer)
 
             copy_render_target(&dst, &picture.render_target)
 
-            sdl.UnlockTexture(backbuffer)
+            unlock_texture(backbuffer)
         }
         else if frame_available(&rcx)
         {
@@ -584,7 +647,7 @@ main :: proc()
 
             copy_latest_frame(&rcx, &dst)
 
-            sdl.UnlockTexture(backbuffer)
+            unlock_texture(backbuffer)
 
             frame_duration := time.tick_lap_time(&time_since_last_flip)
             frame_time      = time.duration_seconds(frame_duration)
@@ -791,6 +854,20 @@ main :: proc()
         // render ui
         //
 
+        if picture := editor.picture_being_shown; picture != nil
+        {
+            show_w := window_w / 4
+            show_h := window_h / 4
+
+            dst_rect: sdl.Rect = {
+                i32(window_w - show_w - 32),
+                i32(window_h - show_h - 32),
+                i32(show_w),
+                i32(show_h),
+            }
+            sdl.RenderCopy(renderer, picture.texture, nil, &dst_rect)
+        }
+
         render_ui_with_sdl :: proc(ctx: ^mu.Context, renderer: ^sdl.Renderer)
         {
             render_text :: proc(renderer: ^sdl.Renderer, pos: mu.Vec2, color: mu.Color, text: string)
@@ -849,6 +926,28 @@ main :: proc()
         }
         render_ui_with_sdl(&mu_ctx, renderer)
 
+        if picture := editor.hovered_picture; picture != nil
+        {
+            show_w := window_w / 4
+            show_h := window_h / 4
+
+            show_x := input.mouse_p.x
+            show_y := input.mouse_p.y
+
+            if show_y + show_h > window_h
+            {
+                show_y -= show_h
+            }
+
+            dst_rect: sdl.Rect = {
+                i32(show_x),
+                i32(show_y),
+                i32(show_w),
+                i32(show_h),
+            }
+            sdl.RenderCopy(renderer, picture.texture, nil, &dst_rect)
+        }
+
         //
         // present
         //
@@ -859,7 +958,7 @@ main :: proc()
         // end of loop guff
         //
 
-        if !editor.pause_animations && editor.picture_being_shown == nil
+        if !editor.pause_animations && is_realtime(&rcx)
         {
             running_time += dt
         }
@@ -876,5 +975,5 @@ main :: proc()
         }
     }
 
-    safely_terminate_render_context(&rcx);
+    safely_terminate_render_context(&rcx)
 }

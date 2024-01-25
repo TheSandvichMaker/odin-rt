@@ -9,25 +9,6 @@ import "core:fmt"
 import "core:time"
 import "core:simd/x86"
 
-Picture_State :: enum
-{
-    None,
-
-    Queued,
-    In_Progress,
-    Done,
-}
-
-Picture :: struct
-{
-    using render_target: Render_Target,
-
-    state: Picture_State,
-
-    file_name: String_Storage(1024),
-    spp      : int,
-}
-
 Threaded_Render_Frame :: struct #align(64)
 {
     /* atomically written to stuff */
@@ -322,7 +303,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 {
                     if picture.state == .In_Progress
                     {
-                        intrinsics.atomic_compare_exchange_strong(&picture.state, .In_Progress, .Done)
+                        intrinsics.atomic_compare_exchange_strong(&picture.state, .In_Progress, .Rendered)
                         intrinsics.atomic_sub(&ctx.pictures_in_flight, 1)
                     }
                     else
@@ -365,6 +346,11 @@ copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) ->
     }
 
     return copied
+}
+
+is_realtime :: proc(ctx: ^Threaded_Render_Context) -> (realtime: bool)
+{
+    return ctx.pictures_in_flight == 0
 }
 
 safely_terminate_render_context :: proc(ctx: ^Threaded_Render_Context)
