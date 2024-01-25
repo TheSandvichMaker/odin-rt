@@ -11,7 +11,7 @@ package rt
 // [x] - box intersection
 // [ ] - triangle intersection
 // [x] - bvh construction
-// [ ] - bvh traversal
+// [x] - bvh traversal/intersection
 // [ ] - simple translucency
 // [ ] - physically based BRDF
 // [ ] - nested objects and material transitions between them
@@ -36,6 +36,7 @@ import "core:time"
 import "core:strings"
 import "core:slice"
 import "core:runtime"
+import sm "core:container/small_array"
 import sdl "vendor:sdl2"
 import mu "vendor:microui"
 
@@ -79,6 +80,189 @@ mu_color_from_linear_srgb :: proc(srgb: Vector3) -> mu.Color
         a = rgba.a,
     }
     return result
+}
+
+Input_State :: struct
+{
+    mouse_p      : [2]int,
+    lmb_down     : bool,
+    lmb_pressed  : bool,
+    lmb_released : bool,
+}
+
+Picture_Request :: struct
+{
+    w         : int,
+    h         : int,
+    spp       : int,
+    file_name : String_Storage(1024),
+}
+
+default_picture_request :: proc(w, h: int) -> Picture_Request
+{
+    result: Picture_Request = {
+        w   = w,
+        h   = h,
+        spp = 128,
+    }
+    copy_string_into_storage(&result.file_name, "odin_rt_render.png")
+    return result
+}
+
+Editor_State :: struct
+{
+    window_w                   : int,
+    window_h                   : int,
+
+    preview_w                  : int,
+    preview_h                  : int,
+
+    editor_dt                  : f64,
+    render_time                : f64,
+    max_bvh_depth              : int,
+
+    pause_animations           : bool,
+    draw_bvh                   : bool,
+    draw_bvh_depth             : int,
+    fov                        : f32,
+    view_mode                  : View_Mode,
+    show_flags                 : Show_Flags_Set,
+
+    picture_request            : Picture_Request,
+    submitted_picture_requests : sm.Small_Array(4, Picture_Request),
+
+    picture_in_progress        : ^Picture,
+    picture_shown_timer        : f64,
+    picture_being_shown        : ^Picture,
+    pictures                   : [dynamic]^Picture,
+}
+
+do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State)
+{
+    if editor.picture_shown_timer > 0.0
+    {
+        editor.picture_shown_timer -= editor.editor_dt
+
+        if editor.picture_shown_timer <= 0.0
+        {
+            editor.picture_being_shown = nil
+            editor.picture_shown_timer = 0.0
+        }
+    }
+
+    mu.text(ctx, fmt.tprintf("Frame time: %.02fms, fps: %.02f", editor.render_time * 1000.0, 1.0 / editor.render_time))
+
+    mu.checkbox(ctx, "Pause Animations", &editor.pause_animations)
+
+    if .ACTIVE in mu.header(ctx, "View Mode")
+    {
+        if changed, value := mu_enum_selection(ctx, View_Mode); changed
+        {
+            editor.view_mode = value
+        }
+    }
+
+    if .ACTIVE in mu.header(ctx, "Show Flags")
+    {
+        mu_flags(ctx, &editor.show_flags)
+    }
+
+    if .Draw_BVH in editor.show_flags
+    {
+        if .ACTIVE in mu.header(ctx, "Draw BVH")
+        {
+            mu.label(ctx, "Show Depth")
+            mu_slider_int(ctx, &editor.draw_bvh_depth, -1, editor.max_bvh_depth)
+        }
+    }
+
+    mu.label(ctx, "fov")
+    mu.slider(ctx, &editor.fov, 45.0, 100.0)
+
+    if editor.picture_in_progress == nil
+    {
+        request := &editor.picture_request
+
+        mu.label(ctx, "Render Resolution W:")
+        mu_number_int(ctx, &request.w)
+        request.w = math.clamp(request.w, 1, 8192)
+
+        mu.label(ctx, "Render Resolution H:")
+        mu_number_int(ctx, &request.h)
+        request.h = math.clamp(request.h, 1, 8192)
+
+        mu.label(ctx, "Render Samples Per Pixel:")
+        mu_number_int(ctx, &request.spp)
+        request.spp = math.clamp(request.spp, 1, 8192)
+
+        if .SUBMIT in mu.button(ctx, "Take Picture")
+        {
+            if sm.space(editor.submitted_picture_requests) > 0
+            {
+                sm.append(&editor.submitted_picture_requests, request^)
+                request ^= default_picture_request(editor.window_w, editor.window_h)
+            }
+        }
+    }
+    else
+    {
+        picture := editor.picture_in_progress
+        if editor.picture_shown_timer <= 0.0 && intrinsics.atomic_load(&picture.state) == .Done
+        {
+            editor.picture_being_shown = picture
+            editor.picture_in_progress = nil
+            editor.picture_shown_timer = 4.0
+        }
+    }
+
+    if editor.picture_shown_timer > 0.0
+    {
+        mu.text(ctx, "Showing picture...")
+    }
+
+    //
+    // debug UI garbo
+    //
+
+    when false
+    {
+    if len(debug_ray_info.nodes_tried) != 0
+    {
+        mu.text(ctx, fmt.tprintf("Debug Ray Primitive: %v", debug_ray_primitive))
+        for node_index in debug_ray_info.nodes_tried
+        {
+            type := "missed"
+
+            not_present := false
+            if debug_ray_info.closest_hit_node == node_index
+            {
+                type = "leaf"
+            }
+            else if slice.contains(debug_ray_info.nodes_hit[:], node_index)
+            {
+                type = "hit"
+            }
+            else if slice.contains(debug_ray_info.nodes_missed[:], node_index)
+            {
+                type = "missed"
+            }
+            else
+            {
+                not_present = true
+            }
+
+            if !not_present
+            {
+                node := &scene.bvh.nodes[node_index]
+                mu.text(ctx, fmt.tprintf("Node (%v): %v", type, node))
+            }
+        }
+    }
+    else if lmb_down && !mu_has_mouse
+    {
+        mu.text(ctx, "Debug Ray Primitive: None")
+    }
+    }
 }
 
 main :: proc()
@@ -203,35 +387,38 @@ main :: proc()
     init_render_context(&rcx, { preview_w, preview_h }, max_threads=-1)
 
     //
+    // Input
+    //
+
+    input: Input_State
+
+    //
+    // Editor State
+    //
+
+    editor: Editor_State
+    editor.view_mode = .Lit
+    editor.fov       = f32(85.0)
+    editor.window_w  = window_w
+    editor.window_h  = window_h
+    editor.preview_w = preview_w
+    editor.preview_h = preview_h
+    editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
+
+    //
     // main loop
     //
 
     running_time: f64 = 0.0
 
-    now := time.tick_now()
-    dt: f32 = 1.0 / 60.0
+    now                  := time.tick_now()
+    time_since_last_flip := time.tick_now()
+    frame_time           := 0.0
 
-    view_mode: View_Mode = .LIT
-    show_flags: Show_Flags_Set
-    fov := f32(85.0)
+    dt: f64 = 1.0 / 60.0
 
-    bvh_max_depth := find_bvh_max_depth(&scene.bvh)
+    max_bvh_depth := find_bvh_max_depth(&scene.bvh)
 
-    Draw_BVH_Args :: struct
-    {
-        show_depth: int `ui_min: -1, ui_max: 10`,
-    }
-
-    draw_bvh_args: Draw_BVH_Args = {
-        show_depth = -1,
-    }
-
-    mouse_p: [2]int
-    lmb_down     : bool
-    lmb_pressed  : bool
-    lmb_released : bool
-
-    pause_animations: bool
     last_camera: Cached_Camera
 
     for
@@ -242,8 +429,8 @@ main :: proc()
         // handle input
         //
 
-        lmb_pressed  = false
-        lmb_released = false
+        input.lmb_pressed  = false
+        input.lmb_released = false
 
         event: sdl.Event
         for sdl.PollEvent(&event)
@@ -288,16 +475,16 @@ main :: proc()
 
                 case .MOUSEMOTION:
                     mu.input_mouse_move(&mu_ctx, event.motion.x, event.motion.y)
-                    mouse_p[0] = int(event.motion.x)
-                    mouse_p[1] = int(event.motion.y)
+                    input.mouse_p[0] = int(event.motion.x)
+                    input.mouse_p[1] = int(event.motion.y)
 
                 case .MOUSEBUTTONDOWN:
                     ok, button := translate_button(event.button.button)
                     if ok do mu.input_mouse_down(&mu_ctx, event.button.x, event.button.y, button)
                     if button == .LEFT
                     {
-                        lmb_pressed = true
-                        lmb_down    = true
+                        input.lmb_pressed = true
+                        input.lmb_down    = true
                     }
 
                 case .MOUSEBUTTONUP:
@@ -305,8 +492,8 @@ main :: proc()
                     if ok do mu.input_mouse_up(&mu_ctx, event.button.x, event.button.y, button)
                     if button == .LEFT
                     {
-                        lmb_released = true
-                        lmb_down     = false
+                        input.lmb_released = true
+                        input.lmb_down     = false
                     }
 
                 case .KEYDOWN:
@@ -325,9 +512,9 @@ main :: proc()
         debug_ray_t: f32
         debug_ray_info: Ray_Debug_Info
 
-        if !mu_has_mouse && lmb_down
+        if !mu_has_mouse && input.lmb_down
         {
-            uv := Vector2{f32(mouse_p[0]) / f32(window_w), 1.0 - f32(mouse_p[1]) / f32(window_h)}
+            uv := Vector2{f32(input.mouse_p[0]) / f32(window_w), 1.0 - f32(input.mouse_p[1]) / f32(window_h)}
             ray := ray_from_camera_uv(last_camera, uv)
             prev_allocator := context.allocator
             context.allocator = context.temp_allocator
@@ -341,121 +528,9 @@ main :: proc()
 
         mu.begin(&mu_ctx)
 
-        if mu.window(&mu_ctx, "Hello mUI", mu.Rect{ 10, 10, 320, i32(window_h) - 20 })
+        if mu.window(&mu_ctx, "Odin RT Editor", mu.Rect{ 10, 10, 320, i32(window_h) - 20 })
         {
-            // mu_struct(&mu_ctx, &draw_bvh_args)
-
-            mu_flags :: proc(mu_ctx: ^mu.Context, flags: ^bit_set[$T])
-            {
-                type_info := type_info_of(T)
-                if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
-                {
-                    if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
-                    {
-                        for _, i in enum_info.names
-                        {
-                            name  := enum_info.names[i]
-                            value := enum_info.values[i]
-                            state := T(value) in flags
-                            mu.checkbox(mu_ctx, name, &state)
-                            if state 
-                            {
-                                incl(flags, T(value))
-                            }
-                            else
-                            {
-                                excl(flags, T(value))
-                            }
-                        }
-                    }
-                }
-            }
-
-            mu_enum_selection :: proc(mu_ctx: ^mu.Context, $T: typeid) -> (changed: bool, result: T)
-            {
-                type_info := type_info_of(T)
-                if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
-                {
-                    if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
-                    {
-                        for _, i in enum_info.names
-                        {
-                            name  := enum_info.names[i]
-                            value := enum_info.values[i]
-                            if .SUBMIT in mu.button(mu_ctx, name)
-                            {
-                                return true, T(value)
-                            }
-                        }
-                    }
-                }
-
-                return false, T{}
-            }
-
-            mu.checkbox(&mu_ctx, "Pause Animations", &pause_animations)
-
-            if .ACTIVE in mu.header(&mu_ctx, "View Mode")
-            {
-                if changed, value := mu_enum_selection(&mu_ctx, View_Mode); changed
-                {
-                    view_mode = value
-                }
-            }
-
-            if .ACTIVE in mu.header(&mu_ctx, "Show Flags")
-            {
-                mu_flags(&mu_ctx, &show_flags)
-            }
-
-            if .DRAW_BVH in show_flags
-            {
-                if .ACTIVE in mu.header(&mu_ctx, "Draw BVH")
-                {
-                    mu.label(&mu_ctx, "Show Depth")
-                    mu_slider_int(&mu_ctx, &draw_bvh_args.show_depth, -1, bvh_max_depth)
-                }
-            }
-
-            mu.label(&mu_ctx, "fov")
-            mu.slider(&mu_ctx, &fov, 45.0, 100.0)
-
-            if len(debug_ray_info.nodes_tried) != 0
-            {
-                mu.text(&mu_ctx, fmt.tprintf("Debug Ray Primitive: %v", debug_ray_primitive))
-                for node_index in debug_ray_info.nodes_tried
-                {
-                    type := "missed"
-
-                    not_present := false
-                    if debug_ray_info.closest_hit_node == node_index
-                    {
-                        type = "leaf"
-                    }
-                    else if slice.contains(debug_ray_info.nodes_hit[:], node_index)
-                    {
-                        type = "hit"
-                    }
-                    else if slice.contains(debug_ray_info.nodes_missed[:], node_index)
-                    {
-                        type = "missed"
-                    }
-                    else
-                    {
-                        not_present = true
-                    }
-
-                    if !not_present
-                    {
-                        node := &scene.bvh.nodes[node_index]
-                        mu.text(&mu_ctx, fmt.tprintf("Node (%v): %v", type, node))
-                    }
-                }
-            }
-            else if lmb_down && !mu_has_mouse
-            {
-                mu.text(&mu_ctx, "Debug Ray Primitive: None")
-            }
+            do_editor_ui(&mu_ctx, input, &editor)
         }
 
         mu.end(&mu_ctx)
@@ -464,29 +539,62 @@ main :: proc()
         // display most recent frame
         //
 
-        if frame_available(&rcx)
+        lock_texture :: proc(texture: ^sdl.Texture) -> Render_Target
         {
+            size: sdl.Point
+            sdl.QueryTexture(texture, nil, nil, &size.x, &size.y)
+
             pixels_raw : rawptr
             pitch_raw  : c.int
-            sdl.LockTexture(backbuffer, nil, &pixels_raw, &pitch_raw)
+            sdl.LockTexture(texture, nil, &pixels_raw, &pitch_raw)
 
-            dst_pitch  := int(pitch_raw / 4)
-            dst_pixels := ([^]Color_RGBA)(pixels_raw)[:preview_h*dst_pitch]
-     
-            dst_render_target := Render_Target{
-                w      = preview_w,
-                h      = preview_h,
-                pitch  = dst_pitch,
-                pixels = dst_pixels,
+            pitch  := int(pitch_raw / 4)
+            pixels := ([^]Color_RGBA)(pixels_raw)[:int(size.y)*pitch]
+
+            render_target := Render_Target{
+                w      = int(size.x),
+                h      = int(size.y),
+                pitch  = pitch,
+                pixels = pixels,
             }
-            copy_latest_frame(&rcx, &dst_render_target)
+
+            return render_target
+        }
+
+        unlock_texture :: proc(texture: ^sdl.Texture)
+        {
+            sdl.UnlockTexture(texture)
+        }
+
+        picture := editor.picture_in_progress
+        if picture == nil do picture = editor.picture_being_shown
+
+        if picture != nil
+        {
+            dst := lock_texture(backbuffer)
+
+            copy_render_target(&dst, &picture.render_target)
 
             sdl.UnlockTexture(backbuffer)
+        }
+        else if frame_available(&rcx)
+        {
+
+            dst := lock_texture(backbuffer)
+
+            copy_latest_frame(&rcx, &dst)
+
+            sdl.UnlockTexture(backbuffer)
+
+            frame_duration := time.tick_lap_time(&time_since_last_flip)
+            frame_time      = time.duration_seconds(frame_duration)
         }
 
         sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
         sdl.RenderSetClipRect(renderer, nil)
         sdl.RenderCopy(renderer, backbuffer, nil, nil)
+
+        editor.render_time = frame_time
 
         //
         // update scene
@@ -509,22 +617,40 @@ main :: proc()
         camera := Camera{
             origin    = origin,
             direction = direction,
-            fov       = fov,
+            fov       = editor.fov,
             aspect    = f32(preview_w) / f32(preview_h),
         }
 
         view := View{
             scene      = &scene,
             camera     = compute_cached_camera(camera),
-            view_mode  = view_mode,
-            show_flags = show_flags,
+            view_mode  = editor.view_mode,
+            show_flags = editor.show_flags,
         }
 
         last_camera = view.camera
 
         if can_dispatch_frame(&rcx)
         {
-            dispatch_frame(&rcx, view);
+            if sm.len(editor.submitted_picture_requests) > 0
+            {
+                request := sm.pop_front(&editor.submitted_picture_requests)
+
+                picture := new(Picture)
+                picture.render_target = allocate_render_target({request.w, request.h})
+                picture.file_name     = request.file_name
+                picture.spp           = request.spp
+                append(&editor.pictures, picture)
+
+                editor.picture_in_progress = picture
+
+                dispatched, _ := dispatch_picture(&rcx, view, picture)
+                assert(dispatched)
+            }
+            else
+            {
+                dispatch_frame(&rcx, view);
+            }
         }
 
         //
@@ -590,7 +716,7 @@ main :: proc()
             draw_line(line_renderer, color, p010, p011)
         }
 
-        if .DRAW_BVH in show_flags || len(debug_ray_info.nodes_tried) > 0
+        if .Draw_BVH in editor.show_flags || len(debug_ray_info.nodes_tried) > 0
         {
             if len(debug_ray_info.nodes_tried) > 0
             {
@@ -644,7 +770,7 @@ main :: proc()
                     node := args.node
 
                     max_depth := 10
-                    if draw_bvh_args.show_depth == -1 || draw_bvh_args.show_depth == args.depth
+                    if editor.draw_bvh_depth == -1 || editor.draw_bvh_depth == args.depth
                     {
                         color := debug_color(args.depth)
 
@@ -733,13 +859,14 @@ main :: proc()
         // end of loop guff
         //
 
-        if !pause_animations
+        if !editor.pause_animations && editor.picture_being_shown == nil
         {
-            running_time += f64(dt)
+            running_time += dt
         }
 
         dt_hires := time.tick_lap_time(&now)
-        dt = math.min(1.0 / 15.0, f32(time.duration_seconds(dt_hires)))
+        dt = math.min(1.0 / 15.0, time.duration_seconds(dt_hires))
+        editor.editor_dt = dt
 
         free_all(context.temp_allocator)
 

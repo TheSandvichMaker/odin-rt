@@ -121,6 +121,38 @@ allocate_render_target :: proc(resolution: [2]int) -> Render_Target
     return result
 }
 
+copy_render_target :: proc(dst: ^Render_Target, src: ^Render_Target) -> (copied: bool)
+{
+    dst_w      := dst.w
+    dst_h      := dst.h
+    dst_pitch  := dst.pitch
+    dst_pixels := dst.pixels
+
+    src_w      := src.w
+    src_h      := src.h
+    src_pitch  := src.pitch
+    src_pixels := src.pixels
+
+    if dst_w == src_w &&
+       dst_h == src_h
+    {
+        w := src_w
+        h := src_h
+
+        for y := 0; y < h; y += 1
+        {
+            for x := 0; x < w; x += 1
+            {
+                #no_bounds_check dst_pixels[y*dst_pitch + x] = src_pixels[y*src_pitch + x]
+            }
+        }
+
+        copied = true
+    }
+
+    return copied
+}
+
 Accumulation_Buffer :: struct
 {
     accumulated_frame_count : int,
@@ -132,15 +164,15 @@ Accumulation_Buffer :: struct
 
 View_Mode :: enum
 {
-    BLANK,
-    LIT,
-    DEPTH,
-    NORMALS,
+    Blank,
+    Lit,
+    Depth,
+    Normals,
 }
 
 Show_Flags :: enum
 {
-    DRAW_BVH,
+    Draw_BVH,
 }
 
 Show_Flags_Set :: bit_set[Show_Flags]
@@ -196,13 +228,13 @@ render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
 
     switch view_mode
     {
-    case .BLANK:
+    case .Blank:
         /* ... */
-    case .LIT:
+    case .Lit:
         color = shade_ray(scene, ray)
-    case .DEPTH:
+    case .Depth:
         color = show_depth(scene, ray)
-    case .NORMALS:
+    case .Normals:
         color = show_normals(scene, ray)
     }
 

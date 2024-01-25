@@ -16,6 +16,16 @@ mu_slider_int :: proc(ctx: ^mu.Context, value: ^int, low: int, high: int, fmt_st
     return result
 }
 
+mu_number_int :: proc(ctx: ^mu.Context, value: ^int, fmt_string: string = "%.0f", opt: mu.Options = {.ALIGN_CENTER}) -> mu.Result_Set
+{
+    f := f32(value^)
+    mu.push_id(ctx, uintptr(value))
+    result := mu.number(ctx, &f, 1.0, fmt_string, opt)
+    mu.pop_id(ctx)
+    value ^= int(f)
+    return result
+}
+
 mu_struct :: proc(ctx: ^mu.Context, s: ^$T)
 {
     info := type_info_of(T)
@@ -115,3 +125,52 @@ mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info)
             }
     }
 }
+
+mu_flags :: proc(mu_ctx: ^mu.Context, flags: ^bit_set[$T])
+{
+    type_info := type_info_of(T)
+    if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
+    {
+        if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
+        {
+            for _, i in enum_info.names
+            {
+                name  := enum_info.names[i]
+                value := enum_info.values[i]
+                state := T(value) in flags
+                mu.checkbox(mu_ctx, name, &state)
+                if state 
+                {
+                    incl(flags, T(value))
+                }
+                else
+                {
+                    excl(flags, T(value))
+                }
+            }
+        }
+    }
+}
+
+mu_enum_selection :: proc(mu_ctx: ^mu.Context, $T: typeid) -> (changed: bool, result: T)
+{
+    type_info := type_info_of(T)
+    if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
+    {
+        if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
+        {
+            for _, i in enum_info.names
+            {
+                name  := enum_info.names[i]
+                value := enum_info.values[i]
+                if .SUBMIT in mu.button(mu_ctx, name)
+                {
+                    return true, T(value)
+                }
+            }
+        }
+    }
+
+    return false, T{}
+}
+

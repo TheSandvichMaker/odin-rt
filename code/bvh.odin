@@ -31,22 +31,6 @@ BVH_Node :: struct
 
 #assert(size_of(BVH_Node) == 32)
 
-BVH_Visit_Info :: struct
-{
-    index      : u32,
-    parent     : ^BVH_Node,
-    sibling    : ^BVH_Node,
-    depth      : int,
-}
-
-BVH_Visitor_Args :: struct
-{
-    using info : BVH_Visit_Info,
-    bvh        : ^BVH,
-    node       : ^BVH_Node,
-    userdata   : rawptr,
-}
-
 BVH :: struct
 {
     indices : []u32,
@@ -109,8 +93,24 @@ build_bvh :: proc {
     build_bvh_from_input,
 }
 
+BVH_Visit_Info :: struct
+{
+    index      : u32,
+    parent     : ^BVH_Node,
+    sibling    : ^BVH_Node,
+    depth      : int,
+}
+
+BVH_Visitor_Args :: struct
+{
+    using info : BVH_Visit_Info,
+    bvh        : ^BVH,
+    node       : ^BVH_Node,
+    userdata   : rawptr,
+}
+
 // NOT MEANT FOR PERFORMANT ITERATION, this is just convenience for doing BVH related operations.
-// Also this sucks bro... get me an iterator...
+// Also this sucks bro... get an iterator...
 visit_bvh :: proc(bvh: ^BVH, userdata: rawptr, visitor: proc(args: BVH_Visitor_Args))
 {
     stack: sm.Small_Array(32, BVH_Visit_Info)
