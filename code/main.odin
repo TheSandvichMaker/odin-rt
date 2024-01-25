@@ -75,14 +75,14 @@ mu_button_map: []mu.Mouse = {
 }
 
 mu_key_map: []mu.Key = {
-    sdl.Scancode.LSHIFT    = mu.Key.SHIFT,
-    sdl.Scancode.RSHIFT    = mu.Key.SHIFT,
-    sdl.Scancode.LCTRL     = mu.Key.CTRL,
-    sdl.Scancode.RCTRL     = mu.Key.CTRL,
-    sdl.Scancode.LALT      = mu.Key.ALT,
-    sdl.Scancode.RALT      = mu.Key.ALT,
-    sdl.Scancode.RETURN    = mu.Key.RETURN,
-    sdl.Scancode.BACKSPACE = mu.Key.BACKSPACE,
+    sdl.Keycode.LSHIFT    = mu.Key.SHIFT,
+    sdl.Keycode.RSHIFT    = mu.Key.SHIFT,
+    sdl.Keycode.LCTRL     = mu.Key.CTRL,
+    sdl.Keycode.RCTRL     = mu.Key.CTRL,
+    sdl.Keycode.LALT      = mu.Key.ALT,
+    sdl.Keycode.RALT      = mu.Key.ALT,
+    sdl.Keycode.RETURN    = mu.Key.RETURN,
+    sdl.Keycode.BACKSPACE = mu.Key.BACKSPACE,
 }
 
 mu_font_surface : ^sdl.Surface
