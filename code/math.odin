@@ -56,10 +56,10 @@ vector_cast :: proc {
 
 Color_RGBA :: struct
 {
-    a: u8,
-    b: u8,
-    g: u8,
     r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
 }
 
 color_rgb :: proc(r, g, b: u8) -> Color_RGBA

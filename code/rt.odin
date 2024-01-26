@@ -133,8 +133,8 @@ copy_render_target :: proc(dst: ^Render_Target, src: ^Render_Target) -> (copied:
     src_pitch  := src.pitch
     src_pixels := src.pixels
 
-    if dst_w == src_w &&
-       dst_h == src_h
+    if dst_w >= src_w &&
+       dst_h >= src_h
     {
         w := src_w
         h := src_h
@@ -214,7 +214,7 @@ render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x
             ndc := Vector2{ndc_x, ndc_y}
             pixel := render_pixel(params, ndc)
 
-            pixels[y*pitch + x] = pixel
+            #no_bounds_check pixels[y*pitch + x] = pixel
         }
     }
 }

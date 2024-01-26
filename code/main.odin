@@ -36,9 +36,12 @@ import "core:time"
 import "core:strings"
 import "core:slice"
 import "core:runtime"
+import "core:os"
+import path "core:path/filepath"
 import sm "core:container/small_array"
 import sdl "vendor:sdl2"
 import mu "vendor:microui"
+import stbi "vendor:stb/image"
 
 Picture_State :: enum
 {
@@ -65,6 +68,8 @@ Picture :: struct
     file_name: String_Storage(1024),
     spp      : int,
 
+    was_autosaved: bool,
+
     using _sdl: SDL_Picture,
 }
 
@@ -75,12 +80,12 @@ mu_button_map: []mu.Mouse = {
 }
 
 mu_key_map: []mu.Key = {
-    sdl.Keycode.LSHIFT    = mu.Key.SHIFT,
-    sdl.Keycode.RSHIFT    = mu.Key.SHIFT,
-    sdl.Keycode.LCTRL     = mu.Key.CTRL,
-    sdl.Keycode.RCTRL     = mu.Key.CTRL,
-    sdl.Keycode.LALT      = mu.Key.ALT,
-    sdl.Keycode.RALT      = mu.Key.ALT,
+    sdl.Scancode.LSHIFT    = mu.Key.SHIFT,
+    sdl.Scancode.RSHIFT    = mu.Key.SHIFT,
+    sdl.Scancode.LCTRL     = mu.Key.CTRL,
+    sdl.Scancode.RCTRL     = mu.Key.CTRL,
+    sdl.Scancode.LALT      = mu.Key.ALT,
+    sdl.Scancode.RALT      = mu.Key.ALT,
     sdl.Keycode.RETURN    = mu.Key.RETURN,
     sdl.Keycode.BACKSPACE = mu.Key.BACKSPACE,
 }
@@ -231,7 +236,7 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
         if sm.space(editor.submitted_picture_requests) > 0
         {
             sm.append(&editor.submitted_picture_requests, request^)
-            request ^= default_picture_request(editor.window_w, editor.window_h)
+            request ^= default_picture_request(request.w, request.h)
         }
     }
 
@@ -305,12 +310,55 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
 create_sdl_texture :: proc(renderer: ^sdl.Renderer, w: int, h: int, pixels: []Color_RGBA) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
 {
     surface = sdl.CreateRGBSurfaceWithFormat(0, i32(w), i32(h), 
-                                             32, cast(u32)sdl.PixelFormatEnum.RGBA8888)
+                                             32, cast(u32)sdl.PixelFormatEnum.RGBA32)
 
     copy(([^]Color_RGBA)(surface.pixels)[:w*h], pixels)
 
     texture = sdl.CreateTextureFromSurface(renderer, surface)
     return surface, texture
+}
+
+autosave_picture :: proc(picture: ^Picture)
+{
+    // Autosave picture
+
+    image_name := string_from_storage(&picture.file_name)
+
+    now              := time.now()
+    year, month, day := time.date(now)
+    hour, min,   sec := time.clock_from_time(now)
+
+    date_time_string := fmt.tprintf("%4i%2i%2i-%2i%2i%2i", year, int(month), day, hour, min, sec)
+
+    os.make_directory("autosaves")
+
+    ext  := path.ext (image_name)
+    stem := path.stem(image_name)
+
+    save_name := fmt.tprintf("autosaves/%v_%v%v", stem, date_time_string, ext)
+    save_name_c := strings.clone_to_cstring(save_name, context.temp_allocator)
+
+    w      := c.int(picture.w)
+    h      := c.int(picture.h)
+    comp   := c.int(4)
+    data   := raw_data(picture.pixels)
+    stride := 4*w
+
+    result: c.int = 0
+
+    switch ext
+    {
+        case ".png" : result = stbi.write_png(save_name_c, w, h, comp, data, stride)
+        case ".bmp" : result = stbi.write_bmp(save_name_c, w, h, comp, data)
+        case ".tga" : result = stbi.write_tga(save_name_c, w, h, comp, data)
+        case ".jpg" : result = stbi.write_jpg(save_name_c, w, h, comp, data, c.int(100))
+        case ".jpeg": result = stbi.write_jpg(save_name_c, w, h, comp, data, c.int(100))
+    }
+
+    if result != 0
+    {
+        intrinsics.atomic_store(&picture.was_autosaved, true)
+    }
 }
 
 main :: proc()
@@ -338,11 +386,14 @@ main :: proc()
     preview_w := 720
     preview_h := 405
 
+    max_preview_w := 3840
+    max_preview_h := 2160
+
     backbuffer := sdl.CreateTexture(renderer, 
-                                    cast(u32)sdl.PixelFormatEnum.RGBA8888, 
+                                    cast(u32)sdl.PixelFormatEnum.RGBA32, 
                                     sdl.TextureAccess.STREAMING, 
-                                    c.int(preview_w), 
-                                    c.int(preview_h))
+                                    c.int(max_preview_w), 
+                                    c.int(max_preview_h))
 
     //
     // microui
@@ -357,7 +408,7 @@ main :: proc()
     create_default_atlas_font :: proc(renderer: ^sdl.Renderer) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
     {
         surface = sdl.CreateRGBSurfaceWithFormat(0, mu.DEFAULT_ATLAS_WIDTH, mu.DEFAULT_ATLAS_HEIGHT, 
-                                                 32, cast(u32)sdl.PixelFormatEnum.RGBA8888)
+                                                 32, cast(u32)sdl.PixelFormatEnum.RGBA32)
         pixels := ([^]u8)(surface.pixels)
         for i := 0; i < mu.DEFAULT_ATLAS_WIDTH*mu.DEFAULT_ATLAS_HEIGHT; i += 1
         {
@@ -445,13 +496,14 @@ main :: proc()
     //
 
     editor: Editor_State
-    editor.view_mode = .Lit
-    editor.fov       = f32(85.0)
-    editor.window_w  = window_w
-    editor.window_h  = window_h
-    editor.preview_w = preview_w
-    editor.preview_h = preview_h
+    editor.view_mode       = .Lit
+    editor.fov             = f32(85.0)
+    editor.window_w        = window_w
+    editor.window_h        = window_h
+    editor.preview_w       = preview_w
+    editor.preview_h       = preview_h
     editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
+    editor.draw_bvh_depth  = -1
 
     //
     // main loop
@@ -466,6 +518,7 @@ main :: proc()
     dt: f64 = 1.0 / 60.0
 
     max_bvh_depth := find_bvh_max_depth(&scene.bvh)
+    editor.max_bvh_depth = max_bvh_depth
 
     last_camera: Cached_Camera
 
@@ -622,6 +675,7 @@ main :: proc()
                 editor.picture_in_progress = nil
                 editor.picture_shown_timer = 4.0
 
+                // Prep picture for display
                 picture.surface, picture.texture = create_sdl_texture(renderer, picture.w, picture.h, picture.pixels)
 
                 if intrinsics.atomic_compare_exchange_strong(&picture.state, .Rendered, .Processed) != .Rendered
@@ -631,6 +685,8 @@ main :: proc()
             }
         }
 
+        shown_w := preview_w
+        shown_h := preview_h
         
         if picture := editor.picture_in_progress; picture != nil
         {
@@ -639,6 +695,9 @@ main :: proc()
             copy_render_target(&dst, &picture.render_target)
 
             unlock_texture(backbuffer)
+
+            shown_w = picture.w
+            shown_h = picture.h
         }
         else if frame_available(&rcx)
         {
@@ -655,7 +714,9 @@ main :: proc()
 
         sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
         sdl.RenderSetClipRect(renderer, nil)
-        sdl.RenderCopy(renderer, backbuffer, nil, nil)
+
+        show_rect := sdl.Rect{ 0, 0, i32(shown_w), i32(shown_h) }
+        sdl.RenderCopy(renderer, backbuffer, &show_rect, nil)
 
         editor.render_time = frame_time
 
@@ -707,7 +768,21 @@ main :: proc()
 
                 editor.picture_in_progress = picture
 
-                dispatched, _ := dispatch_picture(&rcx, view, picture)
+                picture_camera := Camera{
+                    origin    = origin,
+                    direction = direction,
+                    fov       = editor.fov,
+                    aspect    = f32(picture.w) / f32(picture.h),
+                }
+
+                picture_view := View{
+                    scene      = &scene,
+                    camera     = compute_cached_camera(picture_camera),
+                    view_mode  = editor.view_mode,
+                    show_flags = editor.show_flags,
+                }
+
+                dispatched, _ := dispatch_picture(&rcx, picture_view, picture)
                 assert(dispatched)
             }
             else
@@ -856,8 +931,9 @@ main :: proc()
 
         if picture := editor.picture_being_shown; picture != nil
         {
-            show_w := window_w / 4
+            aspect := f32(picture.w) / f32(picture.h)
             show_h := window_h / 4
+            show_w := int(math.round(f32(show_h)*aspect))
 
             dst_rect: sdl.Rect = {
                 i32(window_w - show_w - 32),
@@ -928,8 +1004,9 @@ main :: proc()
 
         if picture := editor.hovered_picture; picture != nil
         {
-            show_w := window_w / 4
+            aspect := f32(picture.w) / f32(picture.h)
             show_h := window_h / 4
+            show_w := int(math.round(f32(show_h)*aspect))
 
             show_x := input.mouse_p.x
             show_y := input.mouse_p.y

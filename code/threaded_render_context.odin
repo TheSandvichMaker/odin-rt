@@ -303,8 +303,13 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                 {
                     if picture.state == .In_Progress
                     {
-                        intrinsics.atomic_compare_exchange_strong(&picture.state, .In_Progress, .Rendered)
+                        prev_state := intrinsics.atomic_compare_exchange_strong(
+                            &picture.state, .In_Progress, .Rendered)
+
+                        assert(prev_state == .In_Progress)
+
                         intrinsics.atomic_sub(&ctx.pictures_in_flight, 1)
+                        autosave_picture(picture)
                     }
                     else
                     {
