@@ -4,8 +4,8 @@ import "core:mem"
 
 String_Storage :: struct($N: int) where N > 0
 {
-    buffer : [N]u8,
     len    : int,
+    buffer : [N]u8,
 }
 
 string_from_storage :: proc(storage: ^String_Storage($N)) -> string

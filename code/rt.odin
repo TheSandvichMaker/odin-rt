@@ -1,5 +1,6 @@
 package rt
 
+import "core:intrinsics"
 import "core:math"
 import "core:math/linalg"
 
@@ -189,7 +190,7 @@ copy_render_target :: proc(dst: ^Render_Target, src: ^Render_Target) -> (copied:
 
 Accumulation_Buffer :: struct
 {
-    accumulated_frame_count : int,
+    accumulated_frame_count : u64,
     w      : int,
     h      : int,
     pitch  : int,
@@ -234,6 +235,7 @@ Render_Params :: struct
 {
     using view: View,
 
+    rcx                 : ^Threaded_Render_Context,
     frame_index         : u64,
     render_target       : ^Render_Target,
     accumulation_buffer : ^Accumulation_Buffer,
@@ -274,12 +276,11 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
     pitch  := render_target.pitch
     pixels := render_target.pixels
 
+    base_sample_index: u64 = 0
+
     if accumulation_buffer != nil
     {
-        // assert(accumulation_buffer != nil)
-        // assert(accumulation_buffer.w == w)
-        // assert(accumulation_buffer.h == h)
-        // assert(accumulation_buffer.pitch == pitch)
+        base_sample_index = accumulation_buffer.accumulated_frame_count
     }
 
     pixsize := 1.0 / Vector2{f32(w), f32(h)}
@@ -299,19 +300,22 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
 
             ndc := Vector2{ndc_x, ndc_y}
 
-            pixel_hdr := render_pixel(params, ndc)
+            pixel_hdr: Vector4
 
-            if spp > 1
+            for sample_index: u64 = 0; sample_index < spp; sample_index += 1
             {
-                for sample_index: u64 = 1; sample_index < spp; sample_index += 1
+                abs_sample_index := base_sample_index + sample_index
+
+                noise: Vector3
+                if !accum_needs_clear
                 {
-                    noise := hash3([3]u32{u32(x), u32(y), u32(params.frame_index*spp + sample_index)})
-
-                    jitter     := pixsize*noise.xy
-                    ndc_jitter := ndc + jitter
-
-                    pixel_hdr += render_pixel(params, ndc_jitter)
+                    noise = hash3([3]u32{u32(x), u32(y), u32(abs_sample_index)})
                 }
+
+                jitter     := pixsize*noise.xy
+                ndc_jitter := ndc + jitter
+
+                pixel_hdr += render_pixel(params, ndc_jitter)
             }
 
             if accumulation_buffer != nil

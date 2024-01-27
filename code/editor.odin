@@ -14,7 +14,6 @@ Editor_State :: struct
 
     editor_dt                  : f64,
     render_time                : f64,
-    max_bvh_depth              : int,
 
     pause_animations           : bool,
     draw_bvh                   : bool,
@@ -22,6 +21,8 @@ Editor_State :: struct
     fov                        : f32,
     view_mode                  : View_Mode,
     show_flags                 : Show_Flags_Set,
+
+    bvh_info                   : BVH_Build_Info,
 
     preview_camera             : Camera_Controller,
 
@@ -41,7 +42,7 @@ init_editor :: proc(editor: ^Editor_State, window_w, window_h: int)
     editor.fov             = f32(85.0)
     editor.window_w        = window_w
     editor.window_h        = window_h
-    editor.preview_resolution_scale = 0.25
+    editor.preview_resolution_scale = 0.5
     editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
     editor.draw_bvh_depth  = -1
 }
@@ -91,7 +92,7 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
 
     if .ACTIVE in mu.header(ctx, "Show Flags")
     {
-        mu_flags(ctx, &editor.show_flags)
+        editor.show_flags = mu_flags(ctx, editor.show_flags)
     }
 
     if .Draw_BVH in editor.show_flags
@@ -99,7 +100,7 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
         if .ACTIVE in mu.header(ctx, "Draw BVH")
         {
             mu.label(ctx, "Show Depth")
-            mu_slider_int(ctx, &editor.draw_bvh_depth, -1, editor.max_bvh_depth)
+            mu_slider_int(ctx, &editor.draw_bvh_depth, -1, editor.bvh_info.max_depth)
         }
     }
 

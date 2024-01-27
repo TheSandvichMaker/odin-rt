@@ -1,28 +1,46 @@
 package rt
 
-import mu "vendor:microui"
 import "core:strings"
 import "core:runtime"
 import "core:fmt"
 import "core:intrinsics"
+import mu "vendor:microui"
 
-mu_slider_int :: proc(ctx: ^mu.Context, value: ^int, low: int, high: int, fmt_string: string = "%.0f", opt: mu.Options = {.ALIGN_CENTER}) -> mu.Result_Set
+mu_slider_int :: proc(
+    ctx        : ^mu.Context, 
+    value      : ^int, 
+    low        :  int, 
+    high       :  int, 
+    fmt_string :  string = "%.0f", 
+    opt        :  mu.Options = {.ALIGN_CENTER},
+) -> mu.Result_Set
 {
     f := f32(value^)
+
     mu.push_id(ctx, uintptr(value))
     result := mu.slider(ctx, &f, f32(low), f32(high), 1.0, fmt_string, opt)
     mu.pop_id(ctx)
+
     value ^= int(f)
+
     return result
 }
 
-mu_number_int :: proc(ctx: ^mu.Context, value: ^int, fmt_string: string = "%.0f", opt: mu.Options = {.ALIGN_CENTER}) -> mu.Result_Set
+mu_number_int :: proc(
+    ctx        : ^mu.Context, 
+    value      : ^int, 
+    fmt_string :  string = "%.0f", 
+    opt        :  mu.Options = {.ALIGN_CENTER},
+) -> mu.Result_Set
 {
     f := f32(value^)
+
     mu.push_id(ctx, uintptr(value))
     result := mu.number(ctx, &f, 1.0, fmt_string, opt)
     mu.pop_id(ctx)
+
     value ^= int(f)
+
     return result
 }
 
@@ -126,30 +144,24 @@ mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info)
     }
 }
 
-mu_flags :: proc(mu_ctx: ^mu.Context, flags: ^bit_set[$T])
+mu_flags :: proc(mu_ctx: ^mu.Context, flags: bit_set[$T]) -> bit_set[T]
 {
-    type_info := type_info_of(T)
-    if named_info, ok := type_info.variant.(runtime.Type_Info_Named); ok
+    flags := flags
+
+    type_info := peel_named(type_info_of(T))
+    if enum_info, ok := type_info.variant.(runtime.Type_Info_Enum); ok
     {
-        if enum_info, ok := named_info.base.variant.(runtime.Type_Info_Enum); ok
+        for _, i in enum_info.names
         {
-            for _, i in enum_info.names
-            {
-                name  := enum_info.names[i]
-                value := enum_info.values[i]
-                state := T(value) in flags
-                mu.checkbox(mu_ctx, name, &state)
-                if state 
-                {
-                    incl(flags, T(value))
-                }
-                else
-                {
-                    excl(flags, T(value))
-                }
-            }
+            name  := enum_info.names [i]
+            value := enum_info.values[i]
+            state := T(value) in flags
+            mu.checkbox(mu_ctx, name, &state)
+            flags = set_flag(flags, T(value), state)
         }
     }
+    
+    return flags
 }
 
 mu_enum_selection :: proc(mu_ctx: ^mu.Context, $T: typeid) -> (changed: bool, result: T)

@@ -17,37 +17,38 @@ Threaded_Render_Frame :: struct #align(64)
     render_time_clocks : u64, pad2 : [52]u8,
 
     /* not written to during rendering stuff */
-    view                : View,
-    scene_cloned        : Scene,
-    frame_buffer        : Render_Target,
-    picture_target      : ^Picture,
-    accum_needs_clear   : bool,
+    view               : View,
+    scene_cloned       : Scene,
+    frame_buffer       : Render_Target,
+    picture_target     : ^Picture,
+    accum_needs_clear  : bool,
 
-    tile_size_x      : int,
-    tile_size_y      : int,
-    tile_count_x     : int,
-    tile_count_y     : int,
-    total_tile_count : int,
+    tile_size_x        : int,
+    tile_size_y        : int,
+    tile_count_x       : int,
+    tile_count_y       : int,
+    total_tile_count   : int,
 
     /* frame timing */
-    start_time       : time.Tick,
-    end_time         : time.Tick,
+    start_time         : time.Tick,
+    end_time           : time.Tick,
 }
 
 Threaded_Render_Context :: struct
 {
-    cond  : sync.Cond,
-    mutex : sync.Mutex,
+    cond                 : sync.Cond,
+    mutex                : sync.Mutex,
 
-    threads: [dynamic]^thread.Thread,
+    threads              : [dynamic]^thread.Thread,
 
-    frames: [3]Threaded_Render_Frame,
-    accumulation_buffer: Accumulation_Buffer,
+    frames               : [3]Threaded_Render_Frame,
+    accumulation_buffer  : Accumulation_Buffer,
 
-    exit          : bool,
-    frame_read    : u64,
-    frame_write   : u64,
-    frame_display : u64,
+    exit                 : bool,
+    frame_read           : u64,
+    frame_write          : u64,
+    frame_display        : u64,
+    frame_sync           : u64,
 
     pictures_in_flight   : u64,
     last_frame_displayed : u64,
@@ -110,6 +111,11 @@ can_dispatch_frame :: proc(ctx: ^Threaded_Render_Context) -> bool
     return in_flight < 2
 }
 
+abandon_current_frames :: proc(ctx: ^Threaded_Render_Context)
+{
+    intrinsics.atomic_store(&ctx.frame_sync, intrinsics.atomic_load(&ctx.frame_write))
+}
+
 dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, w, h: int, needs_clear := false) -> (dispatched: bool, frame_index: u64)
 {
     sync.mutex_guard(&ctx.mutex)
@@ -157,8 +163,8 @@ dispatch_picture :: proc(ctx: ^Threaded_Render_Context, view: View, picture: ^Pi
 {
     sync.mutex_guard(&ctx.mutex)
 
-    write   := intrinsics.atomic_load(&ctx.frame_write)
-    display := intrinsics.atomic_load(&ctx.frame_display)
+    write     := intrinsics.atomic_load(&ctx.frame_write)
+    display   := intrinsics.atomic_load(&ctx.frame_display)
     in_flight := write - display
     if in_flight < 2
     {
@@ -256,6 +262,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         tile_count_y := frame.tile_count_y
 
         params := Render_Params{
+            rcx                 = ctx,
             view                = frame.view,
             frame_index         = frame_index,
             render_target       = render_target, 
@@ -313,6 +320,11 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
                     {
                         break;
                     }
+                }
+
+                if accumulation_buffer != nil
+                {
+                    accumulation_buffer.accumulated_frame_count += u64(params.spp)
                 }
 
                 if picture != nil

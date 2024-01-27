@@ -19,6 +19,7 @@ BVH_Builder :: struct
     node_count  : u32,
     nodes       : []BVH_Node, 
     indices     : []u32,
+    max_depth   : int,
     using input : BVH_Builder_Input,
 }
 
@@ -37,15 +38,23 @@ BVH :: struct
     nodes   : []BVH_Node,
 }
 
-build_bvh_from_primitives :: proc(primitives: []Primitive_Holder, allocator := context.allocator) -> BVH
+BVH_Build_Info :: struct
 {
-    if len(primitives) == 0 do return BVH{}
+    max_depth : int,
+}
+
+build_bvh_from_primitives :: proc(
+    primitives: []Primitive_Holder, 
+    allocator := context.allocator,
+) -> (BVH, BVH_Build_Info)
+{
+    primitive_count := len(primitives)
+    if primitive_count <= 0 do return {}, {}
 
     temp_scoped()
 
-    primitive_count := len(primitives)
-
-    input: BVH_Builder_Input = {
+    input: BVH_Builder_Input = 
+    {
         bounds  = make([]Rect3, primitive_count, context.temp_allocator),
     }
 
@@ -54,15 +63,15 @@ build_bvh_from_primitives :: proc(primitives: []Primitive_Holder, allocator := c
         #no_bounds_check input.bounds[i] = find_primitive_bounds(&primitives[i].primitive)
     }
 
-    bvh := build_bvh_from_input(input, allocator)
+    bvh, build_info := build_bvh_from_input(input, allocator)
 
-    return bvh
+    return bvh, build_info
 }
 
-build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allocator) -> BVH
+build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allocator) -> (BVH, BVH_Build_Info)
 {
     primitive_count := len(input.bounds)
-    if primitive_count == 0 do return BVH{}
+    if primitive_count <= 0 do return {}, {}
 
     nodes, _ := mem.make_aligned([]BVH_Node, 2*primitive_count, 64, allocator)
     indices  := make([]u32, primitive_count, allocator)
@@ -72,7 +81,8 @@ build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allo
         #no_bounds_check indices[i] = u32(i)
     }
 
-    builder: BVH_Builder = {
+    builder: BVH_Builder = 
+    {
         node_count = 2,
         nodes      = nodes,
         indices    = indices,
@@ -81,11 +91,18 @@ build_bvh_from_input :: proc(input: BVH_Builder_Input, allocator := context.allo
 
     build_bvh_recursively(&builder, &builder.nodes[0], 0, u32(primitive_count))
 
-    bvh: BVH
-    bvh.nodes   = builder.nodes[:builder.node_count]
-    bvh.indices = builder.indices
+    bvh: BVH = 
+    {
+        nodes   = builder.nodes[:builder.node_count],
+        indices = builder.indices,
+    }
 
-    return bvh
+    build_info: BVH_Build_Info = 
+    {
+        max_depth = builder.max_depth,
+    }
+
+    return bvh, build_info
 }
 
 build_bvh :: proc {
@@ -170,9 +187,11 @@ find_bvh_max_depth :: proc(bvh: ^BVH) -> int
 }
 
 @(private="file")
-build_bvh_recursively :: proc(builder: ^BVH_Builder, parent: ^BVH_Node, first: u32, count: u32)
+build_bvh_recursively :: proc(builder: ^BVH_Builder, parent: ^BVH_Node, first: u32, count: u32, depth := 0)
 {
     assert(count > 0)
+
+    builder.max_depth = max(builder.max_depth, depth)
 
     indices := builder.indices[first:][:count]
 
@@ -201,10 +220,10 @@ build_bvh_recursively :: proc(builder: ^BVH_Builder, parent: ^BVH_Node, first: u
         parent.left_or_first = l_index
 
         l_node := &builder.nodes[l_index]
-        build_bvh_recursively(builder, l_node, first, split_index)
+        build_bvh_recursively(builder, l_node, first, split_index, depth + 1)
 
         r_node := &builder.nodes[r_index]
-        build_bvh_recursively(builder, r_node, first + split_index, count - split_index)
+        build_bvh_recursively(builder, r_node, first + split_index, count - split_index, depth + 1)
     }
 }
 

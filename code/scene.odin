@@ -17,6 +17,8 @@ Scene :: struct
 
     // Probably that will just involve sending over a per-frame TLAS
 
+    was_modified : bool,
+
     sun        : Directional_Light,
     materials  : [dynamic]Material,
     spheres    : [dynamic]Sphere,
@@ -24,6 +26,11 @@ Scene :: struct
     boxes      : [dynamic]Box,
     bvh        : BVH, // TODO: figure this out
     primitives : [dynamic]Primitive_Holder,
+}
+
+scene_modified :: proc(scene: ^Scene)
+{
+    scene.was_modified = true
 }
 
 copy_into_array :: proc(dst: ^[dynamic]$T, src: []T)

@@ -133,9 +133,9 @@ Button_State :: struct
 
 Input_State :: struct
 {
-    mouse_p  : Vector2i,
-    mouse_dp : Vector2i,
-    capture_mouse : bool,
+    mouse_p          : Vector2i,
+    mouse_dp         : Vector2i,
+    capture_mouse    : bool,
 
     buttons: [Button]Button_State,
 }
@@ -255,6 +255,13 @@ autosave_picture :: proc(picture: ^Picture)
     }
 }
 
+Preview_Window :: struct
+{
+    last_view : View,
+    last_w    : int,
+    last_h    : int,
+}
+
 main :: proc()
 {
     //
@@ -319,7 +326,14 @@ main :: proc()
     mu_font_surface, mu_font = create_default_atlas_font(renderer)
 
     //
-    // scene setup
+    // Editor State
+    //
+
+    editor: Editor_State
+    init_editor(&editor, window_w, window_h)
+
+    //
+    // Initialize Default Scene
     //
 
     scene: Scene
@@ -369,8 +383,11 @@ main :: proc()
     }
 
     // TODO: figure it out!
-    scene.bvh = build_bvh(primitives[:])
+    bvh, bvh_info := build_bvh(primitives[:])
+    scene.bvh        = bvh
     scene.primitives = primitives
+
+    editor.bvh_info = bvh_info
 
     //
     // initialize render context
@@ -380,17 +397,16 @@ main :: proc()
     init_render_context(&rcx, { preview_w, preview_h }, max_threads=-1)
 
     //
+    //awbdjia
+    //
+
+    preview: Preview_Window
+
+    //
     // Input
     //
 
     input: Input_State
-
-    //
-    // Editor State
-    //
-
-    editor: Editor_State
-    init_editor(&editor, window_w, window_h)
 
     //
     // main loop
@@ -401,11 +417,7 @@ main :: proc()
     now                  := time.tick_now()
     time_since_last_flip := time.tick_now()
     frame_time           := 0.0
-
-    dt: f64 = 1.0 / 60.0
-
-    max_bvh_depth := find_bvh_max_depth(&scene.bvh)
-    editor.max_bvh_depth = max_bvh_depth
+    dt                   := 1.0 / 60.0
 
     last_camera: Cached_Camera
 
@@ -527,7 +539,12 @@ main :: proc()
         if !mu_has_mouse && button_pressed(&input, .RMB)
         {
             input.capture_mouse = !input.capture_mouse
-            sdl.SetRelativeMouseMode(auto_cast input.capture_mouse)
+            sdl.SetRelativeMouseMode(sdl.bool(input.capture_mouse))
+            sdl.CaptureMouse        (sdl.bool(input.capture_mouse))
+            if !input.capture_mouse
+            {
+                sdl.WarpMouseInWindow(window, i32(window_w / 2), i32(window_h / 2))
+            }
         }
 
         //
@@ -662,6 +679,7 @@ main :: proc()
         // update scene
         //
 
+        // scene_modified(&scene)
         // moving_sphere.p.y = 25.0 + 7.5*math.sin(running_time)
 
         //
@@ -675,7 +693,7 @@ main :: proc()
         }
         target    := Vector3{ 0.0, 15.0, 0.0 }
         direction := target - origin
-        aspect    := f32(preview_w) / f32(preview_h)
+        aspect    := f32(window_w) / f32(window_h)
 
         camera: Camera = ---
 
@@ -736,10 +754,31 @@ main :: proc()
             }
             else
             {
-                scale := editor.preview_resolution_scale
-                next_preview_w := int(f32(window_w)*scale)
-                next_preview_h := int(f32(window_h)*scale)
-                dispatch_frame(&rcx, view, next_preview_w, next_preview_h, needs_clear=true);
+                next_preview_w := int(f32(window_w)*0.25)
+                next_preview_h := int(f32(window_h)*0.25)
+
+                scene_or_view_changed := 
+                    preview.last_view != view || view.scene.was_modified;
+
+                if !scene_or_view_changed
+                {
+                    scale := editor.preview_resolution_scale
+                    next_preview_w = int(f32(window_w)*scale)
+                    next_preview_h = int(f32(window_h)*scale)
+                }
+
+                preview_res_changed :=
+                    preview.last_w != next_preview_w ||
+                    preview.last_h != next_preview_h
+
+                needs_clear := scene_or_view_changed || preview_res_changed
+
+                dispatch_frame(&rcx, view, next_preview_w, next_preview_h, needs_clear=needs_clear);
+
+                preview.last_w          = next_preview_w
+                preview.last_h          = next_preview_h
+                preview.last_view       = view
+                view.scene.was_modified = false
             }
         }
 
