@@ -145,6 +145,16 @@ allocate_render_target :: proc(resolution: [2]int) -> Render_Target
     return result
 }
 
+delete_render_target :: proc(target: ^Render_Target)
+{
+    delete(target.pixels)
+
+    target.w      = 0
+    target.h      = 0
+    target.pitch  = 0
+    target.pixels = nil
+}
+
 copy_render_target :: proc(dst: ^Render_Target, src: ^Render_Target) -> (copied: bool)
 {
     dst_w      := dst.w
@@ -266,10 +276,10 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
 
     if accumulation_buffer != nil
     {
-        assert(accumulation_buffer != nil)
-        assert(accumulation_buffer.w == w)
-        assert(accumulation_buffer.h == h)
-        assert(accumulation_buffer.pitch == pitch)
+        // assert(accumulation_buffer != nil)
+        // assert(accumulation_buffer.w == w)
+        // assert(accumulation_buffer.h == h)
+        // assert(accumulation_buffer.pitch == pitch)
     }
 
     pixsize := 1.0 / Vector2{f32(w), f32(h)}
@@ -306,15 +316,16 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
 
             if accumulation_buffer != nil
             {
-                pixels_hdr := &accumulation_buffer.pixels
+                accum_pitch  := accumulation_buffer.pitch
+                accum_pixels := &accumulation_buffer.pixels
 
                 if !accum_needs_clear
                 {
-                    #no_bounds_check accum := pixels_hdr[y*pitch + x]
+                    #no_bounds_check accum := accum_pixels[y*accum_pitch + x]
                     pixel_hdr += accum
                 }
 
-                #no_bounds_check pixels_hdr[y*pitch + x] = pixel_hdr
+                #no_bounds_check accum_pixels[y*accum_pitch + x] = pixel_hdr
             }
 
             pixel_sdr := tonemap_pixel(params, pixel_hdr)

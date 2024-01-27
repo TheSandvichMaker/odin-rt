@@ -68,7 +68,7 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
     ctx.frame_write   = 1
     ctx.frame_display = 0
 
-    ctx.accumulation_buffer = allocate_accumulation_buffer(resolution)
+    ctx.accumulation_buffer = allocate_accumulation_buffer({3840, 2160})
 
     for &frame in ctx.frames
     {
@@ -110,7 +110,7 @@ can_dispatch_frame :: proc(ctx: ^Threaded_Render_Context) -> bool
     return in_flight < 2
 }
 
-dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, needs_clear := false) -> (dispatched: bool, frame_index: u64)
+dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, w, h: int, needs_clear := false) -> (dispatched: bool, frame_index: u64)
 {
     sync.mutex_guard(&ctx.mutex)
 
@@ -126,8 +126,12 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, needs_clear :=
 
         write_frame.view.scene = &write_frame.scene_cloned
 
-        w := write_frame.frame_buffer.w
-        h := write_frame.frame_buffer.w
+        frame_buffer_needs_resize  := write_frame.frame_buffer.w != w || write_frame.frame_buffer.h != h
+        if frame_buffer_needs_resize
+        {
+            delete_render_target(&write_frame.frame_buffer)
+            write_frame.frame_buffer = allocate_render_target({w, h})
+        }
 
         write_frame.tile_size_x        = 64
         write_frame.tile_size_y        = 64
@@ -138,7 +142,7 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, needs_clear :=
         write_frame.retired_tile_count = 0
         write_frame.render_time_clocks = 0
         write_frame.picture_target     = nil
-        write_frame.accum_needs_clear  = needs_clear
+        write_frame.accum_needs_clear  = needs_clear || frame_buffer_needs_resize
 
         dispatched  = true
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
@@ -341,7 +345,7 @@ frame_available :: proc(ctx: ^Threaded_Render_Context) -> bool
     return ctx.last_frame_displayed < display_frame_index
 }
 
-copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) -> (copied: bool)
+copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) -> (copied: bool, w: int, h: int)
 {
     display_frame_index := intrinsics.atomic_load(&ctx.frame_display)
     last_frame_displayed := ctx.last_frame_displayed
@@ -352,6 +356,8 @@ copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) ->
         src   := &frame.frame_buffer
 
         copied = copy_render_target(dst, src)
+        w      = src.w
+        h      = src.h
 
         if copied
         {
@@ -362,7 +368,7 @@ copy_latest_frame :: proc(ctx: ^Threaded_Render_Context, dst: ^Render_Target) ->
         }
     }
 
-    return copied
+    return copied, w, h
 }
 
 is_realtime :: proc(ctx: ^Threaded_Render_Context) -> (realtime: bool)

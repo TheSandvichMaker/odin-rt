@@ -277,8 +277,8 @@ main :: proc()
 
     renderer := sdl.CreateRenderer(window, -1, sdl.RendererFlags{.ACCELERATED, .PRESENTVSYNC})
 
-    preview_w := 720
-    preview_h := 405
+    preview_w := 480
+    preview_h := 270
 
     max_preview_w := 3840
     max_preview_h := 2160
@@ -390,7 +390,7 @@ main :: proc()
     //
 
     editor: Editor_State
-    init_editor(&editor, window_w, window_h, preview_w, preview_h)
+    init_editor(&editor, window_w, window_h)
 
     //
     // main loop
@@ -550,13 +550,13 @@ main :: proc()
         }
 
         //
-        //
+        // tick editor
         //
 
         tick_editor(&editor, &input)
 
         //
-        // ui logic
+        // do editor UI
         //
 
         mu.begin(&mu_ctx)
@@ -636,7 +636,13 @@ main :: proc()
 
             dst := lock_texture(backbuffer)
 
-            copy_latest_frame(&rcx, &dst)
+            copied, w, h := copy_latest_frame(&rcx, &dst)
+
+            if copied
+            {
+                shown_w, preview_w = w, w
+                shown_h, preview_h = h, h
+            }
 
             unlock_texture(backbuffer)
 
@@ -730,7 +736,10 @@ main :: proc()
             }
             else
             {
-                dispatch_frame(&rcx, view, needs_clear=true);
+                scale := editor.preview_resolution_scale
+                next_preview_w := int(f32(window_w)*scale)
+                next_preview_h := int(f32(window_h)*scale)
+                dispatch_frame(&rcx, view, next_preview_w, next_preview_h, needs_clear=true);
             }
         }
 

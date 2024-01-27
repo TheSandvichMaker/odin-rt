@@ -10,8 +10,7 @@ Editor_State :: struct
     window_w                   : int,
     window_h                   : int,
 
-    preview_w                  : int,
-    preview_h                  : int,
+    preview_resolution_scale   : f32,
 
     editor_dt                  : f64,
     render_time                : f64,
@@ -36,14 +35,13 @@ Editor_State :: struct
     pictures                   : [dynamic]^Picture,
 }
 
-init_editor :: proc(editor: ^Editor_State, window_w, window_h, preview_w, preview_h: int)
+init_editor :: proc(editor: ^Editor_State, window_w, window_h: int)
 {
     editor.view_mode       = .Lit
     editor.fov             = f32(85.0)
     editor.window_w        = window_w
     editor.window_h        = window_h
-    editor.preview_w       = preview_w
-    editor.preview_h       = preview_h
+    editor.preview_resolution_scale = 0.25
     editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
     editor.draw_bvh_depth  = -1
 }
@@ -62,10 +60,7 @@ tick_editor :: proc(editor: ^Editor_State, input: ^Input_State)
         camera.yaw   += camera_delta.x
         camera.pitch = math.clamp(camera.pitch, math.to_radians_f32(-85.0), math.to_radians_f32(85.0))
     }
-}
 
-do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State)
-{
     if editor.picture_shown_timer > 0.0
     {
         editor.picture_shown_timer -= editor.editor_dt
@@ -77,6 +72,11 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
         }
     }
 
+    editor.hovered_picture = nil
+}
+
+do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State)
+{
     mu.text(ctx, fmt.tprintf("Frame time: %.02fms, fps: %.02f", editor.render_time * 1000.0, 1.0 / editor.render_time))
 
     mu.checkbox(ctx, "Pause Animations", &editor.pause_animations)
@@ -103,6 +103,9 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
         }
     }
 
+    mu.label(ctx, "Preview Resolution Scale")
+    mu.slider(ctx, &editor.preview_resolution_scale, 0.1, 1.0)
+
     mu.label(ctx, "fov")
     mu.slider(ctx, &editor.fov, 45.0, 100.0)
 
@@ -127,8 +130,6 @@ do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State
             sm.append(&editor.submitted_picture_requests, request^)
         }
     }
-
-    editor.hovered_picture = nil
 
     if .ACTIVE in mu.header(ctx, "Pictures")
     {
