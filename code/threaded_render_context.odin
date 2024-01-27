@@ -17,10 +17,11 @@ Threaded_Render_Frame :: struct #align(64)
     render_time_clocks : u64, pad2 : [52]u8,
 
     /* not written to during rendering stuff */
-    view             : View,
-    scene_cloned     : Scene,
-    frame_buffer     : Render_Target,
-    picture_target   : ^Picture,
+    view                : View,
+    scene_cloned        : Scene,
+    frame_buffer        : Render_Target,
+    picture_target      : ^Picture,
+    accum_needs_clear   : bool,
 
     tile_size_x      : int,
     tile_size_y      : int,
@@ -41,6 +42,7 @@ Threaded_Render_Context :: struct
     threads: [dynamic]^thread.Thread,
 
     frames: [3]Threaded_Render_Frame,
+    accumulation_buffer: Accumulation_Buffer,
 
     exit          : bool,
     frame_read    : u64,
@@ -65,6 +67,8 @@ init_render_context :: proc(ctx: ^Threaded_Render_Context, resolution: [2]int, m
     ctx.frame_read    = 1
     ctx.frame_write   = 1
     ctx.frame_display = 0
+
+    ctx.accumulation_buffer = allocate_accumulation_buffer(resolution)
 
     for &frame in ctx.frames
     {
@@ -106,7 +110,7 @@ can_dispatch_frame :: proc(ctx: ^Threaded_Render_Context) -> bool
     return in_flight < 2
 }
 
-dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched: bool, frame_index: u64)
+dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, needs_clear := false) -> (dispatched: bool, frame_index: u64)
 {
     sync.mutex_guard(&ctx.mutex)
 
@@ -134,6 +138,7 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View) -> (dispatched
         write_frame.retired_tile_count = 0
         write_frame.render_time_clocks = 0
         write_frame.picture_target     = nil
+        write_frame.accum_needs_clear  = needs_clear
 
         dispatched  = true
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
@@ -220,12 +225,15 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         sync.mutex_unlock(&ctx.mutex)
 
         frame := &ctx.frames[frame_index % len(ctx.frames)]
-        render_target := &frame.frame_buffer
-        picture       := frame.picture_target
+        render_target       := &frame.frame_buffer
+        picture             := frame.picture_target
+        accum_needs_clear   := frame.accum_needs_clear
+        accumulation_buffer := &ctx.accumulation_buffer
 
         if picture != nil
         {
-            render_target = &picture.render_target
+            render_target       = &picture.render_target
+            accumulation_buffer = nil
 
             if picture.state == .Queued
             {
@@ -244,8 +252,12 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         tile_count_y := frame.tile_count_y
 
         params := Render_Params{
-            view        = frame.view,
-            frame_index = frame_index,
+            view                = frame.view,
+            frame_index         = frame_index,
+            render_target       = render_target, 
+            accumulation_buffer = accumulation_buffer, 
+            accum_needs_clear   = accum_needs_clear,
+            spp                 = picture != nil ? picture.spp : 1,
         }
 
         clocks_spent: u64 = 0
@@ -275,7 +287,7 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             tile_y1 := tile_y0 + tile_h
 
             clocks_start := x86._rdtsc()
-            render_tile(params, render_target, tile_x0, tile_x1, tile_y0, tile_y1)
+            render_tile(params, tile_x0, tile_x1, tile_y0, tile_y1)
             clocks_end := x86._rdtsc()
 
             free_all(context.temp_allocator)

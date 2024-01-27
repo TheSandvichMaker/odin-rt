@@ -3,11 +3,11 @@ package rt
 // TODO:
 // [ ] - grab d3d11 device from SDL and render using d3d11 directly
 // [ ] - camera controls
-// [ ] - accumulation buffer
-// [ ] - tonemapping
+// [x] - accumulation buffer
+// [x] - tonemapping
 // [ ] - basic pathtracing 
-// [ ] - image writing
-// [ ] - output render mode
+// [x] - image writing
+// [x] - output render mode
 // [x] - box intersection
 // [ ] - triangle intersection
 // [x] - bvh construction
@@ -20,6 +20,7 @@ package rt
 // [ ] - scene loading (cgltf)
 // [ ] - create scene format
 // [ ] - serialize scene format
+// [ ] - replace microui
 // [ ] - scene editor controls
 // [ ] - scene undo/redo
 // [ ] - support multi-scattering in volumetrics
@@ -65,10 +66,11 @@ Picture :: struct
 
     state: Picture_State,
 
-    file_name: String_Storage(1024),
-    spp      : int,
+    file_name : String_Storage(1024),
+    spp       : int,
 
-    was_autosaved: bool,
+    was_autosaved  : bool,
+    autosaved_name : String_Storage(1024),
 
     using _sdl: SDL_Picture,
 }
@@ -139,172 +141,11 @@ default_picture_request :: proc(w, h: int) -> Picture_Request
     result: Picture_Request = {
         w   = w,
         h   = h,
-        spp = 128,
+        spp = 16,
     }
     copy_string_into_storage(&result.file_name, fmt.tprintf("image %v.png", next_image_index))
     next_image_index += 1
     return result
-}
-
-Editor_State :: struct
-{
-    window_w                   : int,
-    window_h                   : int,
-
-    preview_w                  : int,
-    preview_h                  : int,
-
-    editor_dt                  : f64,
-    render_time                : f64,
-    max_bvh_depth              : int,
-
-    pause_animations           : bool,
-    draw_bvh                   : bool,
-    draw_bvh_depth             : int,
-    fov                        : f32,
-    view_mode                  : View_Mode,
-    show_flags                 : Show_Flags_Set,
-
-    picture_request            : Picture_Request,
-    submitted_picture_requests : sm.Small_Array(4, Picture_Request),
-
-    picture_in_progress        : ^Picture,
-    picture_shown_timer        : f64,
-    picture_being_shown        : ^Picture,
-    hovered_picture            : ^Picture,
-    pictures                   : [dynamic]^Picture,
-}
-
-do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State)
-{
-    if editor.picture_shown_timer > 0.0
-    {
-        editor.picture_shown_timer -= editor.editor_dt
-
-        if editor.picture_shown_timer <= 0.0
-        {
-            editor.picture_being_shown = nil
-            editor.picture_shown_timer = 0.0
-        }
-    }
-
-    mu.text(ctx, fmt.tprintf("Frame time: %.02fms, fps: %.02f", editor.render_time * 1000.0, 1.0 / editor.render_time))
-
-    mu.checkbox(ctx, "Pause Animations", &editor.pause_animations)
-
-    if .ACTIVE in mu.header(ctx, "View Mode")
-    {
-        if changed, value := mu_enum_selection(ctx, View_Mode); changed
-        {
-            editor.view_mode = value
-        }
-    }
-
-    if .ACTIVE in mu.header(ctx, "Show Flags")
-    {
-        mu_flags(ctx, &editor.show_flags)
-    }
-
-    if .Draw_BVH in editor.show_flags
-    {
-        if .ACTIVE in mu.header(ctx, "Draw BVH")
-        {
-            mu.label(ctx, "Show Depth")
-            mu_slider_int(ctx, &editor.draw_bvh_depth, -1, editor.max_bvh_depth)
-        }
-    }
-
-    mu.label(ctx, "fov")
-    mu.slider(ctx, &editor.fov, 45.0, 100.0)
-
-    request := &editor.picture_request
-
-    mu.label(ctx, "Render Resolution W:")
-    mu_number_int(ctx, &request.w)
-    request.w = math.clamp(request.w, 1, 8192)
-
-    mu.label(ctx, "Render Resolution H:")
-    mu_number_int(ctx, &request.h)
-    request.h = math.clamp(request.h, 1, 8192)
-
-    mu.label(ctx, "Render Samples Per Pixel:")
-    mu_number_int(ctx, &request.spp)
-    request.spp = math.clamp(request.spp, 1, 8192)
-
-    if .SUBMIT in mu.button(ctx, "Take Picture")
-    {
-        if sm.space(editor.submitted_picture_requests) > 0
-        {
-            sm.append(&editor.submitted_picture_requests, request^)
-            request ^= default_picture_request(request.w, request.h)
-        }
-    }
-
-    editor.hovered_picture = nil
-
-    if .ACTIVE in mu.header(ctx, "Pictures")
-    {
-        for picture, index in editor.pictures
-        {
-            file_name := string_from_storage(&picture.file_name)
-            mu.push_id(ctx, uintptr(index))
-            mu.button(ctx, file_name)
-            if ctx.hover_id == ctx.last_id
-            {
-                editor.hovered_picture = picture
-            }
-            mu.pop_id(ctx)
-        }
-    }
-
-    if editor.picture_shown_timer > 0.0
-    {
-        mu.text(ctx, "Showing picture...")
-    }
-
-    //
-    // debug UI garbo
-    //
-
-    when false
-    {
-    if len(debug_ray_info.nodes_tried) != 0
-    {
-        mu.text(ctx, fmt.tprintf("Debug Ray Primitive: %v", debug_ray_primitive))
-        for node_index in debug_ray_info.nodes_tried
-        {
-            type := "missed"
-
-            not_present := false
-            if debug_ray_info.closest_hit_node == node_index
-            {
-                type = "leaf"
-            }
-            else if slice.contains(debug_ray_info.nodes_hit[:], node_index)
-            {
-                type = "hit"
-            }
-            else if slice.contains(debug_ray_info.nodes_missed[:], node_index)
-            {
-                type = "missed"
-            }
-            else
-            {
-                not_present = true
-            }
-
-            if !not_present
-            {
-                node := &scene.bvh.nodes[node_index]
-                mu.text(ctx, fmt.tprintf("Node (%v): %v", type, node))
-            }
-        }
-    }
-    else if lmb_down && !mu_has_mouse
-    {
-        mu.text(ctx, "Debug Ray Primitive: None")
-    }
-    }
 }
 
 create_sdl_texture :: proc(renderer: ^sdl.Renderer, w: int, h: int, pixels: []Color_RGBA) -> (surface: ^sdl.Surface, texture: ^sdl.Texture)
@@ -320,22 +161,19 @@ create_sdl_texture :: proc(renderer: ^sdl.Renderer, w: int, h: int, pixels: []Co
 
 autosave_picture :: proc(picture: ^Picture)
 {
-    // Autosave picture
-
     image_name := string_from_storage(&picture.file_name)
 
     now              := time.now()
     year, month, day := time.date(now)
     hour, min,   sec := time.clock_from_time(now)
 
-    date_time_string := fmt.tprintf("%4i%2i%2i-%2i%2i%2i", year, int(month), day, hour, min, sec)
+    date_time_string := fmt.tprintf("%4i%2i%2i%2i%2i%2i", year, int(month), day, hour, min, sec)
 
     os.make_directory("autosaves")
 
-    ext  := path.ext (image_name)
-    stem := path.stem(image_name)
+    ext := path.ext(image_name)
 
-    save_name := fmt.tprintf("autosaves/%v_%v%v", stem, date_time_string, ext)
+    save_name   := fmt.tprintf("autosaves/%v_%v%v", "autosave", date_time_string, ext)
     save_name_c := strings.clone_to_cstring(save_name, context.temp_allocator)
 
     w      := c.int(picture.w)
@@ -357,6 +195,7 @@ autosave_picture :: proc(picture: ^Picture)
 
     if result != 0
     {
+        copy_string_into_storage(&picture.autosaved_name, save_name)
         intrinsics.atomic_store(&picture.was_autosaved, true)
     }
 }
@@ -496,14 +335,7 @@ main :: proc()
     //
 
     editor: Editor_State
-    editor.view_mode       = .Lit
-    editor.fov             = f32(85.0)
-    editor.window_w        = window_w
-    editor.window_h        = window_h
-    editor.preview_w       = preview_w
-    editor.preview_h       = preview_h
-    editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
-    editor.draw_bvh_depth  = -1
+    init_editor(&editor, window_w, window_h, preview_w, preview_h)
 
     //
     // main loop
@@ -787,7 +619,7 @@ main :: proc()
             }
             else
             {
-                dispatch_frame(&rcx, view);
+                dispatch_frame(&rcx, view, needs_clear=true);
             }
         }
 

@@ -159,7 +159,18 @@ Accumulation_Buffer :: struct
     w      : int,
     h      : int,
     pitch  : int,
-    pixels : []Vector3,
+    pixels : []Vector4,
+}
+
+allocate_accumulation_buffer :: proc(resolution: [2]int) -> Accumulation_Buffer
+{
+    result := Accumulation_Buffer{
+        w      = resolution.x,
+        h      = resolution.y,
+        pitch  = resolution.x,
+        pixels = make([]Vector4, resolution.x*resolution.y),
+    }
+    return result
 }
 
 View_Mode :: enum
@@ -188,15 +199,56 @@ View :: struct
 Render_Params :: struct
 {
     using view: View,
-    frame_index : u64,
+
+    frame_index         : u64,
+    render_target       : ^Render_Target,
+    accumulation_buffer : ^Accumulation_Buffer,
+    accum_needs_clear   : bool,
+    spp                 : int,
 }
 
-render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x1_, y0_, y1_: int)
+hash3 :: proc(x: [3]u32) -> Vector3
 {
+    k : u32 : 1103515245;  // GLIB C
+
+    x := x
+
+    x.x = ((x.x >> 8) ~x.y)*k
+    x.y = ((x.y >> 8) ~x.z)*k
+    x.z = ((x.z >> 8) ~x.x)*k
+    
+    x.x = ((x.x >> 8) ~x.y)*k
+    x.y = ((x.y >> 8) ~x.z)*k
+    x.z = ((x.z >> 8) ~x.x)*k
+
+    x.x = ((x.x >> 8) ~x.y)*k
+    x.y = ((x.y >> 8) ~x.z)*k
+    x.z = ((x.z >> 8) ~x.x)*k
+
+    return vector_cast(f32, x)*(1.0 / f32(0xffffffff))
+}
+
+render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
+{
+    render_target       := params.render_target
+    accumulation_buffer := params.accumulation_buffer
+    accum_needs_clear   := params.accum_needs_clear
+    spp                 := u64(params.spp)
+
     w      := render_target.w
     h      := render_target.h
     pitch  := render_target.pitch
     pixels := render_target.pixels
+
+    if accumulation_buffer != nil
+    {
+        assert(accumulation_buffer != nil)
+        assert(accumulation_buffer.w == w)
+        assert(accumulation_buffer.h == h)
+        assert(accumulation_buffer.pitch == pitch)
+    }
+
+    pixsize := 1.0 / Vector2{f32(w), f32(h)}
 
     x0 := math.clamp(x0_, 0, w)
     x1 := math.clamp(x1_, 0, w)
@@ -212,17 +264,46 @@ render_tile :: proc(params: Render_Params, render_target: ^Render_Target, x0_, x
             ndc_x := 2.0*(f32(x) / f32(w)) - 1.0
 
             ndc := Vector2{ndc_x, ndc_y}
-            pixel := render_pixel(params, ndc)
 
-            #no_bounds_check pixels[y*pitch + x] = pixel
+            pixel_hdr := render_pixel(params, ndc)
+
+            if spp > 1
+            {
+                for sample_index: u64 = 1; sample_index < spp; sample_index += 1
+                {
+                    noise := hash3([3]u32{u32(x), u32(y), u32(params.frame_index*spp + sample_index)})
+
+                    jitter     := pixsize*noise.xy
+                    ndc_jitter := ndc + jitter
+
+                    pixel_hdr += render_pixel(params, ndc_jitter)
+                }
+            }
+
+            if accumulation_buffer != nil
+            {
+                pixels_hdr := &accumulation_buffer.pixels
+
+                if !accum_needs_clear
+                {
+                    #no_bounds_check accum := pixels_hdr[y*pitch + x]
+                    pixel_hdr += accum
+                }
+
+                #no_bounds_check pixels_hdr[y*pitch + x] = pixel_hdr
+            }
+
+            pixel_sdr := tonemap_pixel(params, pixel_hdr)
+
+            #no_bounds_check pixels[y*pitch + x] = pixel_sdr
         }
     }
 }
 
 @(require_results)
-render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
+render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Vector4
 {
-    ray   := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
+    ray := ray_from_camera(camera, ndc, 0.001, math.F32_MAX)
 
     color: Vector3
 
@@ -238,9 +319,17 @@ render_pixel :: proc(using params: Render_Params, ndc: Vector2) -> Color_RGBA
         color = show_normals(scene, ray)
     }
 
-    color = apply_tonemap(color)
+    return Vector4{color.x, color.y, color.z, 1.0}
+}
 
-    return rgba8_from_color(color)
+@(require_results)
+tonemap_pixel :: proc(using params: Render_Params, color: Vector4) -> Color_RGBA
+{
+    color := color
+    color.xyz /= color.w
+
+    color.xyz = apply_tonemap(color.xyz)
+    return rgba8_from_color(color.xyz)
 }
 
 show_depth :: proc(scene: ^Scene, using ray: Ray) -> Vector3

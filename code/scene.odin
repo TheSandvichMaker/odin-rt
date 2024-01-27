@@ -100,11 +100,12 @@ Ray_Debug_Info :: struct
 }
 
 @(require_results)
-intersect_scene_accelerated_impl :: proc(scene: ^Scene, 
-                                         ray: Ray, 
-                                         $EARLY_OUT: bool, 
-                                         $WRITE_DEBUG_INFO: bool, 
-                                         debug: ^Ray_Debug_Info) -> (result: ^Primitive, t: f32)
+intersect_scene_accelerated_impl :: proc(
+    scene             : ^Scene, 
+    ray               : Ray, 
+    $EARLY_OUT        : bool, 
+    $WRITE_DEBUG_INFO : bool, 
+    debug             : ^Ray_Debug_Info) -> (result: ^Primitive, t: f32)
 {
     bvh := &scene.bvh
 
@@ -117,7 +118,7 @@ intersect_scene_accelerated_impl :: proc(scene: ^Scene,
     for sm.len(stack) > 0
     {
         node_index := sm.pop_back(&stack)
-        node := &bvh.nodes[node_index]
+        node       := &bvh.nodes[node_index]
 
         when WRITE_DEBUG_INFO
         {
