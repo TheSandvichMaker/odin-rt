@@ -24,6 +24,8 @@ Editor_State :: struct
     view_mode                  : View_Mode,
     show_flags                 : Show_Flags_Set,
 
+    preview_camera             : Camera_Controller,
+
     picture_request            : Picture_Request,
     submitted_picture_requests : sm.Small_Array(4, Picture_Request),
 
@@ -44,6 +46,22 @@ init_editor :: proc(editor: ^Editor_State, window_w, window_h, preview_w, previe
     editor.preview_h       = preview_h
     editor.picture_request = default_picture_request(editor.window_w, editor.window_h)
     editor.draw_bvh_depth  = -1
+}
+
+tick_editor :: proc(editor: ^Editor_State, input: ^Input_State)
+{
+    dt := editor.editor_dt
+
+    camera := &editor.preview_camera
+    
+    if input.capture_mouse
+    {
+        camera_speed := f32((1.0 / 512.0)*math.PI)
+        camera_delta := camera_speed*vector_cast(f32, input.mouse_dp)
+        camera.pitch -= camera_delta.y
+        camera.yaw   += camera_delta.x
+        camera.pitch = math.clamp(camera.pitch, math.to_radians_f32(-85.0), math.to_radians_f32(85.0))
+    }
 }
 
 do_editor_ui :: proc(ctx: ^mu.Context, input: Input_State, editor: ^Editor_State)

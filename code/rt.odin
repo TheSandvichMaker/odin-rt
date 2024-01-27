@@ -3,6 +3,30 @@ package rt
 import "core:math"
 import "core:math/linalg"
 
+Camera_Controller :: struct
+{
+    origin : Vector3,
+    pitch  : f32,
+    yaw    : f32,
+    roll   : f32,
+}
+
+@(require_results)
+camera_from_controller :: proc(controller: Camera_Controller, fov: f32, aspect: f32) -> Camera
+{
+    quat      := linalg.quaternion_from_pitch_yaw_roll(controller.pitch, controller.yaw, controller.roll)
+    direction := linalg.mul(quat, Vector3{0.0, 0.0, -1.0})
+    
+    result := Camera{
+        origin    = controller.origin,
+        direction = direction,
+        fov       = fov,
+        aspect    = aspect,
+    }
+
+    return result
+}
+
 Camera :: struct
 {
     origin    : Vector3,

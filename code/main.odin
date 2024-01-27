@@ -39,9 +39,9 @@ import "core:slice"
 import "core:runtime"
 import "core:os"
 import path "core:path/filepath"
-import sm "core:container/small_array"
-import sdl "vendor:sdl2"
-import mu "vendor:microui"
+import sm   "core:container/small_array"
+import sdl  "vendor:sdl2"
+import mu   "vendor:microui"
 import stbi "vendor:stb/image"
 
 Picture_State :: enum
@@ -52,12 +52,6 @@ Picture_State :: enum
     In_Progress,
     Rendered,
     Processed,
-}
-
-SDL_Picture :: struct
-{
-    surface: ^sdl.Surface,
-    texture: ^sdl.Texture,
 }
 
 Picture :: struct
@@ -73,6 +67,12 @@ Picture :: struct
     autosaved_name : String_Storage(1024),
 
     using _sdl: SDL_Picture,
+}
+
+SDL_Picture :: struct
+{
+    surface: ^sdl.Surface,
+    texture: ^sdl.Texture,
 }
 
 mu_button_map: []mu.Mouse = {
@@ -117,12 +117,67 @@ mu_color_from_linear_srgb :: proc(srgb: Vector3) -> mu.Color
     return result
 }
 
+Button :: enum
+{
+    LMB,
+    MMB,
+    RMB,
+}
+
+Button_State :: struct
+{
+    down     : bool,
+    pressed  : bool,
+    released : bool,
+}
+
 Input_State :: struct
 {
-    mouse_p      : [2]int,
-    lmb_down     : bool,
-    lmb_pressed  : bool,
-    lmb_released : bool,
+    mouse_p  : Vector2i,
+    mouse_dp : Vector2i,
+    capture_mouse : bool,
+
+    buttons: [Button]Button_State,
+}
+
+button_down :: proc(input: ^Input_State, button_index: Button) -> bool
+{
+    return input.buttons[button_index].down
+}
+
+button_pressed :: proc(input: ^Input_State, button_index: Button) -> bool
+{
+    return input.buttons[button_index].pressed
+}
+
+button_released :: proc(input: ^Input_State, button_index: Button) -> bool
+{
+    return input.buttons[button_index].released
+}
+
+new_input_frame :: proc(input: ^Input_State)
+{
+    input.mouse_dp = 0
+
+    for &button in input.buttons
+    {
+        button.pressed  = false
+        button.released = false
+    }
+}
+
+handle_button :: proc(input: ^Input_State, button_index: Button, down: bool)
+{
+    button := &input.buttons[button_index]
+    button.pressed  =  down && down != button.down
+    button.released = !down && down != button.down
+    button.down     =  down
+}
+
+button_from_sdl_button_map: []Button = {
+    sdl.BUTTON_LEFT   = .LMB,
+    sdl.BUTTON_MIDDLE = .MMB,
+    sdl.BUTTON_RIGHT  = .RMB,
 }
 
 Picture_Request :: struct
@@ -362,13 +417,14 @@ main :: proc()
         // handle input
         //
 
-        input.lmb_pressed  = false
-        input.lmb_released = false
+        mu_has_mouse := mu_ctx.hover_id != 0 || mu_ctx.focus_id != 0
+
+        new_input_frame(&input)
 
         event: sdl.Event
         for sdl.PollEvent(&event)
         {
-            translate_button :: proc(button: u8) -> (ok: bool, result: mu.Mouse)
+            mu_button_from_sdl_button :: proc(button: u8) -> (ok: bool, result: mu.Mouse)
             {
                 if int(button) < len(mu_button_map)
                 {
@@ -379,7 +435,7 @@ main :: proc()
                 return ok, result
             }
 
-            translate_key :: proc(in_key: sdl.Keycode) -> (ok: bool, result: mu.Key)
+            mu_key_from_sdl_key :: proc(in_key: sdl.Keycode) -> (ok: bool, result: mu.Key)
             {
                 key := i32(in_key) & ~i32(sdl.SCANCODE_MASK)
 
@@ -390,6 +446,16 @@ main :: proc()
                 }
 
                 return ok, result
+            }
+
+            button_from_sdl_button :: proc(button: u8) -> (result: Button, ok: bool)
+            {
+                if int(button) < len(button_from_sdl_button_map)
+                {
+                    result = button_from_sdl_button_map[button]
+                    ok     = true
+                }
+                return result, ok
             }
 
             #partial switch (event.type)
@@ -407,53 +473,87 @@ main :: proc()
                     mu.input_text(&mu_ctx, text_as_string)
 
                 case .MOUSEMOTION:
-                    mu.input_mouse_move(&mu_ctx, event.motion.x, event.motion.y)
-                    input.mouse_p[0] = int(event.motion.x)
-                    input.mouse_p[1] = int(event.motion.y)
+                    if input.capture_mouse
+                    {
+                        mu.input_mouse_move(&mu_ctx, 0, 0)
+                    }
+                    else
+                    {
+                        mu.input_mouse_move(&mu_ctx, event.motion.x, event.motion.y)
+                    }
+                    input.mouse_p.x  = i32(event.motion.x)
+                    input.mouse_p.y  = i32(event.motion.y)
+                    input.mouse_dp.x = i32(event.motion.xrel)
+                    input.mouse_dp.y = i32(event.motion.yrel)
 
                 case .MOUSEBUTTONDOWN:
-                    ok, button := translate_button(event.button.button)
-                    if ok do mu.input_mouse_down(&mu_ctx, event.button.x, event.button.y, button)
-                    if button == .LEFT
+                    if !input.capture_mouse
                     {
-                        input.lmb_pressed = true
-                        input.lmb_down    = true
+                        if ok, button := mu_button_from_sdl_button(event.button.button); ok
+                        {
+                            mu.input_mouse_down(&mu_ctx, event.button.x, event.button.y, button)
+                        }
+                    }
+
+                    if button, ok := button_from_sdl_button(event.button.button); ok
+                    {
+                        handle_button(&input, button, true)
                     }
 
                 case .MOUSEBUTTONUP:
-                    ok, button := translate_button(event.button.button)
-                    if ok do mu.input_mouse_up(&mu_ctx, event.button.x, event.button.y, button)
-                    if button == .LEFT
+                    if !input.capture_mouse
                     {
-                        input.lmb_released = true
-                        input.lmb_down     = false
+                        if ok, button := mu_button_from_sdl_button(event.button.button); ok
+                        {
+                            mu.input_mouse_up(&mu_ctx, event.button.x, event.button.y, button)
+                        }
+                    }
+
+                    if button, ok := button_from_sdl_button(event.button.button); ok
+                    {
+                        handle_button(&input, button, false)
                     }
 
                 case .KEYDOWN:
-                    ok, key := translate_key(event.key.keysym.sym)
+                    ok, key := mu_key_from_sdl_key(event.key.keysym.sym)
                     if ok do mu.input_key_down(&mu_ctx, key)
 
                 case .KEYUP:
-                    ok, key := translate_key(event.key.keysym.sym)
+                    ok, key := mu_key_from_sdl_key(event.key.keysym.sym)
                     if ok do mu.input_key_up(&mu_ctx, key)
             }
         }
 
-        mu_has_mouse := mu_ctx.hover_id != 0 || mu_ctx.focus_id != 0
+        if !mu_has_mouse && button_pressed(&input, .RMB)
+        {
+            input.capture_mouse = !input.capture_mouse
+            sdl.SetRelativeMouseMode(auto_cast input.capture_mouse)
+        }
+
+        //
+        // ??
+        //
 
         debug_ray_primitive: ^Primitive
         debug_ray_t: f32
         debug_ray_info: Ray_Debug_Info
 
-        if !mu_has_mouse && input.lmb_down
+        if !mu_has_mouse && button_down(&input, .LMB)
         {
             uv := Vector2{f32(input.mouse_p[0]) / f32(window_w), 1.0 - f32(input.mouse_p[1]) / f32(window_h)}
             ray := ray_from_camera_uv(last_camera, uv)
             prev_allocator := context.allocator
             context.allocator = context.temp_allocator
-            debug_ray_primitive, debug_ray_t = intersect_scene_accelerated_impl(&scene, ray, EARLY_OUT=false, WRITE_DEBUG_INFO=true, debug=&debug_ray_info)
+            debug_ray_primitive, debug_ray_t = intersect_scene_accelerated_impl(
+                &scene, ray, EARLY_OUT=false, WRITE_DEBUG_INFO=true, debug=&debug_ray_info)
             context.allocator = prev_allocator
         }
+
+        //
+        //
+        //
+
+        tick_editor(&editor, &input)
 
         //
         // ui logic
@@ -569,12 +669,23 @@ main :: proc()
         }
         target    := Vector3{ 0.0, 15.0, 0.0 }
         direction := target - origin
+        aspect    := f32(preview_w) / f32(preview_h)
 
-        camera := Camera{
-            origin    = origin,
-            direction = direction,
-            fov       = editor.fov,
-            aspect    = f32(preview_w) / f32(preview_h),
+        camera: Camera = ---
+
+        if input.capture_mouse
+        {
+            editor.preview_camera.origin = origin
+            camera = camera_from_controller(editor.preview_camera, fov=editor.fov, aspect=aspect)
+        }
+        else
+        {
+            camera = Camera{
+                origin    = origin,
+                direction = direction,
+                fov       = editor.fov,
+                aspect    = f32(preview_w) / f32(preview_h),
+            }
         }
 
         view := View{
@@ -840,8 +951,8 @@ main :: proc()
             show_h := window_h / 4
             show_w := int(math.round(f32(show_h)*aspect))
 
-            show_x := input.mouse_p.x
-            show_y := input.mouse_p.y
+            show_x := int(input.mouse_p.x)
+            show_y := int(input.mouse_p.y)
 
             if show_y + show_h > window_h
             {
