@@ -133,7 +133,7 @@ make_spiral_generator :: proc(start: Vector2i) -> Spiral_Generator
     gen: Spiral_Generator =
     {
         at                           = start,
-        direction                    = { 0, -1 },
+        direction                    = { -1, 0 },
         run_length                   = 0,
         run_left                     = 1,
         runs_before_length_increase  = 1,
@@ -143,9 +143,6 @@ make_spiral_generator :: proc(start: Vector2i) -> Spiral_Generator
 
 next_spiral_tile :: proc(gen: ^Spiral_Generator) -> Vector2i
 {
-    next := gen.at + gen.direction
-    gen.at = next
-
     gen.run_left -= 1
 
     if gen.run_left == 0
@@ -162,7 +159,10 @@ next_spiral_tile :: proc(gen: ^Spiral_Generator) -> Vector2i
         gen.run_left  = gen.run_length
     }
 
-    return next
+    result := gen.at
+    gen.at += gen.direction
+
+    return result
 }
 
 generate_spiral_positions :: proc(
@@ -176,14 +176,14 @@ generate_spiral_positions :: proc(
     result := make([]Vector2i, tile_count, allocator)
 
     center: Vector2i = { i32(tile_count_x / 2), i32(tile_count_y / 2) }
-    result[0] = center
-
     gen := make_spiral_generator(center)
-    tile_index: i32 = 1
+
+    tile_index: i32 = 0
     for tile_index < tile_count 
     {
         pos := next_spiral_tile(&gen)
-        if pos.x >= 0 && pos.y >= 0 && pos.x <= tile_count_x && pos.y <= tile_count_y
+        if pos.x >= 0           && pos.y >= 0 && 
+           pos.x < tile_count_x && pos.y < tile_count_y
         {
             result[tile_index] = pos
             tile_index += 1
