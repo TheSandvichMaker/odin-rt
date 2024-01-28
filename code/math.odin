@@ -198,3 +198,88 @@ rect3_find_largest_axis :: proc(rect: Rect3) -> int
     if abs(dim[2]) > abs(dim[result]) do result = 2
     return result
 }
+
+Xorshift32_State :: distinct u32
+
+random_seed :: proc(seed: u32) -> Xorshift32_State
+{
+    return Xorshift32_State(seed == 0 ? 1 : seed)
+}
+
+random_next :: proc(state: ^Xorshift32_State) -> u32
+{
+	/* Algorithm "xor" from p. 4 of Marsaglia, "Xorshift RNGs" */
+    x := state^
+	x ~= x << 13;
+	x ~= x >> 17;
+	x ~= x << 5;
+    state ^= x
+	return u32(x)
+}
+
+random_unilateral :: proc(state: ^Xorshift32_State) -> f32
+{
+    x := random_next(state)
+    h := u32(0x3f800000) | (x & ((1 << 24) - 1))
+    f := transmute(f32)h - 1.0
+    return f
+}
+
+random_unilateral_v2 :: proc(state: ^Xorshift32_State) -> Vector2
+{
+    return {
+        random_unilateral(state),
+        random_unilateral(state),
+    }
+}
+
+random_unilateral_v3 :: proc(state: ^Xorshift32_State) -> Vector3
+{
+    return {
+        random_unilateral(state),
+        random_unilateral(state),
+        random_unilateral(state),
+    }
+}
+
+random_unilateral_v4 :: proc(state: ^Xorshift32_State) -> Vector4
+{
+    return {
+        random_unilateral(state),
+        random_unilateral(state),
+        random_unilateral(state),
+        random_unilateral(state),
+    }
+}
+
+random_bilateral :: proc(state: ^Xorshift32_State) -> f32
+{
+    return 2.0*random_unilateral(state) - 1.0
+}
+
+random_bilateral_v2 :: proc(state: ^Xorshift32_State) -> Vector2
+{
+    return {
+        random_bilateral(state),
+        random_bilateral(state),
+    }
+}
+
+random_bilateral_v3 :: proc(state: ^Xorshift32_State) -> Vector3
+{
+    return {
+        random_bilateral(state),
+        random_bilateral(state),
+        random_bilateral(state),
+    }
+}
+
+random_bilateral_v4 :: proc(state: ^Xorshift32_State) -> Vector4
+{
+    return {
+        random_bilateral(state),
+        random_bilateral(state),
+        random_bilateral(state),
+        random_bilateral(state),
+    }
+}

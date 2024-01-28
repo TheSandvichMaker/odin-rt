@@ -3,20 +3,22 @@ package rt
 import "core:mem"
 import "core:mem/virtual"
 
-temp_arena :: proc() -> ^virtual.Arena
+Arena      :: virtual.Arena
+Arena_Temp :: virtual.Arena_Temp
+
+temp_arena :: proc() -> ^Arena
 {
-    result := (^virtual.Arena)(context.temp_allocator.data) // DANGER!!
+    result := (^Arena)(context.temp_allocator.data) // DANGER!!
     return result
 }
 
 @(deferred_out = temp_scoped_end)
-temp_scoped :: proc() -> virtual.Arena_Temp
+temp_scoped :: proc() -> Arena_Temp
 {
     return virtual.arena_temp_begin(temp_arena())
 }
 
-temp_scoped_end :: proc(temp: virtual.Arena_Temp)
+temp_scoped_end :: proc(temp: Arena_Temp)
 {
     virtual.arena_temp_end(temp)
 }
-

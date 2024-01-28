@@ -8,47 +8,50 @@ import "core:thread"
 import "core:fmt"
 import "core:time"
 import "core:simd/x86"
+import "core:mem/virtual"
 
 Threaded_Render_Frame :: struct #align(64)
 {
-    /* atomically written to stuff */
-    next_tile_index    : int, pad0 : [52]u8,
-    retired_tile_count : int, pad1 : [52]u8,
-    render_time_clocks : u64, pad2 : [52]u8,
+    /* atomically written to */
+    using _: struct #align(64) { next_tile_index    : int }, // bill pls fix, what is this
+    using _: struct #align(64) { retired_tile_count : int },
+    using _: struct #align(64) { render_time_clocks : u64 },
 
-    /* not written to during rendering stuff */
-    view               : View,
-    scene_cloned       : Scene,
-    frame_buffer       : Render_Target,
-    picture_target     : ^Picture,
-    accum_needs_clear  : bool,
+    /* */
+    arena               : Arena,
 
-    tile_size_x        : int,
-    tile_size_y        : int,
-    tile_count_x       : int,
-    tile_count_y       : int,
-    total_tile_count   : int,
+    /* read-only */
+    view              : View,
+    scene_cloned      : Scene,
+    accum_needs_clear : bool,
+    tile_size_x       : int,
+    tile_size_y       : int,
+    tile_count_x      : int,
+    tile_count_y      : int,
+    total_tile_count  : int,
+    spiral_positions  : []Vector2i,
 
-    /* frame timing */
-    start_time         : time.Tick,
-    end_time           : time.Tick,
+    /* read-write (non-atomic) */
+    frame_buffer      : Render_Target,
+    picture_target    : ^Picture,
 }
 
 Threaded_Render_Context :: struct
 {
-    cond                 : sync.Cond,
-    mutex                : sync.Mutex,
+    /* guards Threaded_Render_Frame data*/
+    mutex   : sync.Mutex,
+    /* synchronizes render threads at frame boundaries */
+    cond    : sync.Cond, // guarded by mutex
+    threads : [dynamic]^thread.Thread,
 
-    threads              : [dynamic]^thread.Thread,
+    frames              : [3]Threaded_Render_Frame,
+    accumulation_buffer : Accumulation_Buffer,
 
-    frames               : [3]Threaded_Render_Frame,
-    accumulation_buffer  : Accumulation_Buffer,
-
-    exit                 : bool,
-    frame_read           : u64,
-    frame_write          : u64,
-    frame_display        : u64,
-    frame_sync           : u64,
+    exit          : bool,
+    frame_read    : u64,
+    frame_write   : u64,
+    frame_display : u64,
+    frame_sync    : u64,
 
     pictures_in_flight   : u64,
     last_frame_displayed : u64,
@@ -116,6 +119,80 @@ abandon_current_frames :: proc(ctx: ^Threaded_Render_Context)
     intrinsics.atomic_store(&ctx.frame_sync, intrinsics.atomic_load(&ctx.frame_write))
 }
 
+Spiral_Generator :: struct
+{
+    at                           : Vector2i,
+    direction                    : Vector2i,
+    run_left                     : i32,
+    run_length                   : i32,
+    runs_before_length_increase  : i32,
+}
+
+make_spiral_generator :: proc(start: Vector2i) -> Spiral_Generator
+{
+    gen: Spiral_Generator =
+    {
+        at                           = start,
+        direction                    = { 0, -1 },
+        run_length                   = 0,
+        run_left                     = 1,
+        runs_before_length_increase  = 1,
+    }
+    return gen
+}
+
+next_spiral_tile :: proc(gen: ^Spiral_Generator) -> Vector2i
+{
+    next := gen.at + gen.direction
+    gen.at = next
+
+    gen.run_left -= 1
+
+    if gen.run_left == 0
+    {
+        gen.runs_before_length_increase -= 1
+
+        if gen.runs_before_length_increase == 0
+        {
+            gen.runs_before_length_increase = 2
+            gen.run_length                 += 1
+        }
+
+        gen.direction = { -gen.direction.y, gen.direction.x }
+        gen.run_left  = gen.run_length
+    }
+
+    return next
+}
+
+generate_spiral_positions :: proc(
+    tile_count_x: i32, 
+    tile_count_y: i32, 
+    allocator := context.allocator,
+) -> []Vector2i
+{
+    tile_count := tile_count_x*tile_count_y
+
+    result := make([]Vector2i, tile_count, allocator)
+
+    center: Vector2i = { i32(tile_count_x / 2), i32(tile_count_y / 2) }
+    result[0] = center
+
+    gen := make_spiral_generator(center)
+    tile_index: i32 = 1
+    for tile_index < tile_count 
+    {
+        pos := next_spiral_tile(&gen)
+        if pos.x >= 0 && pos.y >= 0 && pos.x <= tile_count_x && pos.y <= tile_count_y
+        {
+            result[tile_index] = pos
+            tile_index += 1
+        }
+    }
+
+    return result
+}
+
 dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, w, h: int, needs_clear := false) -> (dispatched: bool, frame_index: u64)
 {
     sync.mutex_guard(&ctx.mutex)
@@ -139,6 +216,7 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, w, h: int, nee
             write_frame.frame_buffer = allocate_render_target({w, h})
         }
 
+        virtual.arena_free_all(&write_frame.arena)
         write_frame.tile_size_x        = 64
         write_frame.tile_size_y        = 64
         write_frame.tile_count_x       = (w + write_frame.tile_size_x - 1) / write_frame.tile_size_x
@@ -149,6 +227,12 @@ dispatch_frame :: proc(ctx: ^Threaded_Render_Context, view: View, w, h: int, nee
         write_frame.render_time_clocks = 0
         write_frame.picture_target     = nil
         write_frame.accum_needs_clear  = needs_clear || frame_buffer_needs_resize
+
+        write_frame.spiral_positions = generate_spiral_positions(
+            i32(write_frame.tile_count_x),
+            i32(write_frame.tile_count_y),
+            virtual.arena_allocator(&write_frame.arena),
+        )
 
         dispatched  = true
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
@@ -163,8 +247,8 @@ dispatch_picture :: proc(ctx: ^Threaded_Render_Context, view: View, picture: ^Pi
 {
     sync.mutex_guard(&ctx.mutex)
 
-    write     := intrinsics.atomic_load(&ctx.frame_write)
-    display   := intrinsics.atomic_load(&ctx.frame_display)
+    write   := intrinsics.atomic_load(&ctx.frame_write)
+    display := intrinsics.atomic_load(&ctx.frame_display)
     in_flight := write - display
     if in_flight < 2
     {
@@ -178,6 +262,7 @@ dispatch_picture :: proc(ctx: ^Threaded_Render_Context, view: View, picture: ^Pi
         w := picture.w
         h := picture.h
 
+        virtual.arena_free_all(&write_frame.arena)
         write_frame.tile_size_x          = 64
         write_frame.tile_size_y          = 64
         write_frame.tile_count_x         = (w + write_frame.tile_size_x - 1) / write_frame.tile_size_x
@@ -188,6 +273,12 @@ dispatch_picture :: proc(ctx: ^Threaded_Render_Context, view: View, picture: ^Pi
         write_frame.render_time_clocks   = 0
         write_frame.picture_target       = picture
         write_frame.picture_target.state = .Queued
+
+        write_frame.spiral_positions = generate_spiral_positions(
+            i32(write_frame.tile_count_x),
+            i32(write_frame.tile_count_y),
+            virtual.arena_allocator(&write_frame.arena),
+        )
 
         ctx.pictures_in_flight += 1
         frame_index = intrinsics.atomic_add(&ctx.frame_write, 1)
@@ -240,8 +331,12 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
         accum_needs_clear   := frame.accum_needs_clear
         accumulation_buffer := &ctx.accumulation_buffer
 
+        use_spiral_pattern := false
+
         if picture != nil
         {
+            use_spiral_pattern = true
+
             render_target       = &picture.render_target
             accumulation_buffer = nil
 
@@ -292,10 +387,19 @@ render_thread_proc :: proc(data: Per_Thread_Render_Data)
             tile_index_x := tile_index % tile_count_x
             tile_index_y := tile_index / tile_count_x
 
+            if use_spiral_pattern
+            {
+                tile_pos := frame.spiral_positions[tile_index]
+                tile_index_x = int(tile_pos.x)
+                tile_index_y = int(tile_pos.y)
+            }
+
             tile_x0 := tile_index_x*tile_w
             tile_y0 := tile_index_y*tile_h
             tile_x1 := tile_x0 + tile_w
             tile_y1 := tile_y0 + tile_h
+
+            params.rand = random_seed(u32(tile_index_x) + 1337*u32(tile_index_y) + 69420*u32(params.frame_index))
 
             clocks_start := x86._rdtsc()
             render_tile(params, tile_x0, tile_x1, tile_y0, tile_y1)

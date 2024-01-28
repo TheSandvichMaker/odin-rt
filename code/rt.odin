@@ -241,27 +241,7 @@ Render_Params :: struct
     accumulation_buffer : ^Accumulation_Buffer,
     accum_needs_clear   : bool,
     spp                 : int,
-}
-
-hash3 :: proc(x: [3]u32) -> Vector3
-{
-    k : u32 : 1103515245;  // GLIB C
-
-    x := x
-
-    x.x = ((x.x >> 8) ~x.y)*k
-    x.y = ((x.y >> 8) ~x.z)*k
-    x.z = ((x.z >> 8) ~x.x)*k
-    
-    x.x = ((x.x >> 8) ~x.y)*k
-    x.y = ((x.y >> 8) ~x.z)*k
-    x.z = ((x.z >> 8) ~x.x)*k
-
-    x.x = ((x.x >> 8) ~x.y)*k
-    x.y = ((x.y >> 8) ~x.z)*k
-    x.z = ((x.z >> 8) ~x.x)*k
-
-    return vector_cast(f32, x)*(1.0 / f32(0xffffffff))
+    rand                : Xorshift32_State,
 }
 
 render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
@@ -270,6 +250,7 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
     accumulation_buffer := params.accumulation_buffer
     accum_needs_clear   := params.accum_needs_clear
     spp                 := u64(params.spp)
+    rand                := params.rand
 
     w      := render_target.w
     h      := render_target.h
@@ -309,7 +290,7 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
                 noise: Vector3
                 if !accum_needs_clear
                 {
-                    noise = hash3([3]u32{u32(x), u32(y), u32(abs_sample_index)})
+                    noise = random_bilateral_v3(&rand)
                 }
 
                 jitter     := pixsize*noise.xy

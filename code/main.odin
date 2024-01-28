@@ -264,6 +264,8 @@ Preview_Window :: struct
 
 main :: proc()
 {
+    test: f32
+
     //
     // create window
     //
