@@ -29,6 +29,7 @@ dot       :: linalg.dot
 cross     :: linalg.cross
 normalize :: linalg.normalize
 reflect   :: linalg.reflect
+refract   :: linalg.refract
 
 vector2_cast :: proc "contextless" ($E: typeid, source: [2]$T) -> [2]E
 {
@@ -52,6 +53,15 @@ vector_cast :: proc {
     vector2_cast,
     vector3_cast,
     vector4_cast,
+}
+
+exp_v3 :: proc(v: Vector3) -> Vector3
+{
+    return {
+        math.exp(v.x),
+        math.exp(v.y),
+        math.exp(v.z),
+    }
 }
 
 Color_RGBA :: struct

@@ -3,8 +3,15 @@ package rt
 import "core:math"
 import "core:simd"
 
+Material_Kind :: enum
+{
+    Opaque,
+    Translucent,
+}
+
 Material :: struct
 {
+    kind           : Material_Kind,
     albedo         : Vector3,
     reflectiveness : f32,
 }

@@ -272,8 +272,8 @@ main :: proc()
 
     window_x := 32
     window_y := 64
-    window_w := 1280
-    window_h := 720
+    window_w := 2560
+    window_h := 1440
 
     sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "1")
 
@@ -363,7 +363,7 @@ main :: proc()
     */
 
     {
-        material := add_material(&scene, { albedo = { 1.0, 0.0, 0.0 }, reflectiveness = 1.0 })
+        material := add_material(&scene, { kind = .Translucent, albedo = { 0.0, 0.1, 0.1 }, reflectiveness = 1.0 })
 
         spacing := f32(20.0)
 

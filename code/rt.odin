@@ -380,7 +380,7 @@ show_normals :: proc(scene: ^Scene, using ray: Ray) -> Vector3
     return result
 }
 
-shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
+shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 8, medium: ^Material = nil) -> Vector3
 {
     if (recursion == 0)
     {
@@ -399,11 +399,21 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
         p := ro + t*rd
         n: Vector3 = normal_from_hit(primitive, p)
 
-        n_dot_l := math.max(0.0, dot(sun.d, n))
+        inside_hit := false
+
+        cos_theta := -dot(rd, n)
+        if cos_theta < 0.0
+        {
+            inside_hit = true
+            cos_theta = -cos_theta
+            n = -n
+        }
+
+        n_dot_l := max(0.0, dot(sun.d, n))
 
         material := get_material(scene, primitive.material)
 
-        if n_dot_l > 0.0
+        if material.kind != .Translucent && n_dot_l > 0.0
         {
             shadow_ray := make_ray(p + 0.0001*n, sun.d, t_min, t_max)
             in_shadow := intersect_scene_shadow(scene, shadow_ray)
@@ -418,9 +428,21 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 4) -> Vector3
         {
             next_ray := make_ray(p + 0.0001*n, reflect(rd, n), t_min, t_max)
 
-            cos_theta := -dot(rd, n)
             fresnel   := schlick_fresnel(cos_theta)
             color += material.reflectiveness*fresnel*shade_ray(scene, next_ray, recursion - 1)
+        }
+
+        if material.kind == .Translucent
+        {
+            refract_ray := make_ray(p - 0.001*n, refract(rd, n, 1.57), t_min, t_max)
+            color += shade_ray(scene, refract_ray, recursion - 1, material)
+        }
+
+        if medium != nil
+        {
+            assert(medium.kind == .Translucent)
+            // absorption := exp_v3(-t*medium.albedo)
+            // color *= absorption
         }
     }
 
