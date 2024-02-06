@@ -175,8 +175,7 @@ generate_spiral_positions :: proc(
 
     result := make([]Vector2i, tile_count, allocator)
 
-    center: Vector2i = { i32(tile_count_x / 2), i32(tile_count_y / 2) }
-    gen := make_spiral_generator(center)
+    gen := make_spiral_generator({ i32(tile_count_x / 2), i32(tile_count_y / 2) })
 
     tile_index: i32 = 0
     for tile_index < tile_count 
@@ -185,6 +184,7 @@ generate_spiral_positions :: proc(
         if pos.x >= 0           && pos.y >= 0 && 
            pos.x < tile_count_x && pos.y < tile_count_y
         {
+            pos.y = tile_count_y - pos.y - 1
             result[tile_index] = pos
             tile_index += 1
         }

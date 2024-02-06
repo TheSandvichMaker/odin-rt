@@ -280,12 +280,12 @@ intersect_scene_brute_force_impl :: proc(scene: ^Scene, ray: Ray, $early_out: bo
 @(require_results)
 intersect_scene_brute_force :: proc(scene: ^Scene, ray: Ray) -> (^Primitive, f32)
 {
-    return intersect_scene_brute_force_impl(scene, ray, false)
+    return intersect_scene_brute_force_impl(scene, ray, early_out=false)
 }
 
 @(require_results)
 intersect_scene_shadow_brute_force :: proc(scene: ^Scene, ray: Ray) -> bool
 {
-    primitive, t := intersect_scene_brute_force_impl(scene, ray, true)
+    primitive, t := intersect_scene_brute_force_impl(scene, ray, early_out=true)
     return primitive != nil
 }

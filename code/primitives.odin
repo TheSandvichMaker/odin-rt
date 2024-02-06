@@ -14,6 +14,7 @@ Material :: struct
     kind           : Material_Kind,
     albedo         : Vector3,
     reflectiveness : f32,
+    ior            : f32,
 }
 
 Material_Index :: distinct u32

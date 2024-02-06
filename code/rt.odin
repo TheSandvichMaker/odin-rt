@@ -285,8 +285,6 @@ render_tile :: proc(params: Render_Params, x0_, x1_, y0_, y1_: int)
 
             for sample_index: u64 = 0; sample_index < spp; sample_index += 1
             {
-                abs_sample_index := base_sample_index + sample_index
-
                 noise: Vector3
                 if !accum_needs_clear
                 {
@@ -380,6 +378,59 @@ show_normals :: proc(scene: ^Scene, using ray: Ray) -> Vector3
     return result
 }
 
+trace_translucent_shadow :: proc(scene: ^Scene, ray: Ray, max_depth := 6) -> Vector3
+{
+    ray := ray
+
+    transmission :  Vector3  = { 1, 1, 1 }
+    medium       : ^Material = nil
+
+    loop:
+    for depth := 0; depth < max_depth; depth += 1
+    {
+        primitive, t := intersect_scene(scene, ray)
+
+        if medium != nil
+        {
+            absorption := exp_v3(-t*medium.albedo)
+            transmission *= absorption
+        }
+
+        if primitive != nil
+        {
+            material := get_material(scene, primitive.material)
+
+            switch (material.kind)
+            {
+            case .Translucent:
+                p := ray.ro + t*ray.rd
+                n := normal_from_hit(primitive, p)
+                exterior_hit := dot(ray.rd, n) <= 0.0
+
+                if exterior_hit
+                {
+                    medium = material
+                }
+                else
+                {
+                    medium = nil
+                }
+
+                ray = make_ray(p + 0.001*ray.rd, ray.rd, ray.t_min, ray.t_max)
+
+            case .Opaque:
+                break loop
+            }
+        }
+        else
+        {
+            break loop
+        }
+    }
+
+    return transmission
+}
+
 shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 8, medium: ^Material = nil) -> Vector3
 {
     if (recursion == 0)
@@ -415,34 +466,36 @@ shade_ray :: proc(scene: ^Scene, using ray: Ray, recursion := 8, medium: ^Materi
 
         if material.kind != .Translucent && n_dot_l > 0.0
         {
-            shadow_ray := make_ray(p + 0.0001*n, sun.d, t_min, t_max)
-            in_shadow := intersect_scene_shadow(scene, shadow_ray)
-
-            if !in_shadow
-            {
-                color = material.albedo*sun.color*n_dot_l
-            }
+            shadow_ray := make_ray(p + 0.001*n, sun.d, t_min, t_max)
+            shadow_factor := trace_translucent_shadow(scene, shadow_ray) // intersect_scene_shadow(scene, shadow_ray)
+            color = shadow_factor*material.albedo*sun.color*n_dot_l
         }
+
+        fresnel := schlick_fresnel(cos_theta)
 
         if material.reflectiveness > 0.0
         {
-            next_ray := make_ray(p + 0.0001*n, reflect(rd, n), t_min, t_max)
-
-            fresnel   := schlick_fresnel(cos_theta)
+            next_ray := make_ray(p + 0.001*n, reflect(rd, n), t_min, t_max)
             color += material.reflectiveness*fresnel*shade_ray(scene, next_ray, recursion - 1)
         }
 
         if material.kind == .Translucent
         {
-            refract_ray := make_ray(p - 0.001*n, refract(rd, n, 1.57), t_min, t_max)
-            color += shade_ray(scene, refract_ray, recursion - 1, material)
+            eta := material.ior
+            if !inside_hit
+            {
+                eta = 1.0 / eta
+            }
+
+            refract_ray := make_ray(p - 0.001*n, refract(rd, n, eta), t_min, t_max)
+            color += (1.0 - fresnel)*shade_ray(scene, refract_ray, recursion - 1, material)
         }
 
         if medium != nil
         {
             assert(medium.kind == .Translucent)
-            // absorption := exp_v3(-t*medium.albedo)
-            // color *= absorption
+            absorption := exp_v3(-t*medium.albedo)
+            color *= absorption
         }
     }
 

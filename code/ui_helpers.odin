@@ -2,8 +2,12 @@ package rt
 
 import "core:strings"
 import "core:runtime"
+import "core:reflect"
 import "core:fmt"
 import "core:intrinsics"
+import "core:strconv"
+import "core:math"
+import "core:math/bits"
 import mu "vendor:microui"
 
 mu_slider_int :: proc(
@@ -52,8 +56,32 @@ mu_struct :: proc(ctx: ^mu.Context, s: ^$T)
 
 UI_Notes_Int :: struct
 {
-    ui_min : Maybe(int),
-    ui_max : Maybe(int),
+    ui_min : Maybe(i64),
+    ui_max : Maybe(i64),
+}
+
+parse_ui_notes_int :: proc(tag: string) -> UI_Notes_Int
+{
+    result: UI_Notes_Int
+
+    parse_int_tag :: proc(tag: string, key: string) -> Maybe(i64)
+    {
+        tag := reflect.Struct_Tag(tag)
+        if value, ok := reflect.struct_tag_lookup(tag, key); ok
+        {
+            if parsed, ok := strconv.parse_i64((string)(value)); ok
+            {
+                return parsed
+            }
+        }
+
+        return nil
+    }
+
+    result.ui_min = parse_int_tag(tag, "ui_min")
+    result.ui_max = parse_int_tag(tag, "ui_max")
+
+    return result
 }
 
 UI_Notes_Float :: struct
@@ -63,11 +91,7 @@ UI_Notes_Float :: struct
     ui_step : Maybe(f64),
 }
 
-parse_ui_notes :: proc(notes: $T)
-{
-}
-
-mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info)
+mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info, tag := "")
 {
     bytes := ([^]u8)(x)
 
@@ -83,30 +107,47 @@ mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info)
             for member_info, i in v.types
             {
                 mu.label(ctx, v.names[i])
-                mu_struct_inner(ctx, &bytes[v.offsets[i]], member_info)
+                mu_struct_inner(ctx, &bytes[v.offsets[i]], member_info, v.tags[i])
             }
 
         case runtime.Type_Info_Integer:
             size   := info.size
             signed := v.signed
 
-            handle_number :: proc(ctx: ^mu.Context, x: rawptr, $T: typeid)
+            handle_number :: proc(ctx: ^mu.Context, x: rawptr, $T: typeid, notes: UI_Notes_Int)
             {
+                min := notes.ui_min.? or_else bits.I64_MIN
+                max := notes.ui_max.? or_else bits.I64_MAX
+
+                min_f32 := f32(min)
+                max_f32 := f32(max)
+
                 k := f32((^T)(x)^)
                 mu.push_id(ctx, uintptr(x))
-                mu.number(ctx, &k, 1.0)
+                if min > bits.I64_MIN && max < bits.I64_MAX
+                {
+                    mu.slider(ctx, &k, min_f32, max_f32, 1.0)
+                    k = math.clamp(k, min_f32, max_f32)
+                }
+                else
+                {
+                    mu.number(ctx, &k, 1.0)
+                    k = math.clamp(k, min_f32, max_f32)
+                }
                 mu.pop_id(ctx)
                 (^T)(x)^ = T(k)
             }
+
+            notes := parse_ui_notes_int(tag)
 
             if signed
             {
                 switch size
                 {
-                    case 1: handle_number(ctx, x, i8)
-                    case 2: handle_number(ctx, x, i16)
-                    case 4: handle_number(ctx, x, i32)
-                    case 8: handle_number(ctx, x, i64)
+                    case 1: handle_number(ctx, x, i8, notes)
+                    case 2: handle_number(ctx, x, i16, notes)
+                    case 4: handle_number(ctx, x, i32, notes)
+                    case 8: handle_number(ctx, x, i64, notes)
                     case: panic("Crazy integer size!")
                 }
             }
@@ -114,10 +155,10 @@ mu_struct_inner :: proc(ctx: ^mu.Context, x: rawptr, info: ^runtime.Type_Info)
             {
                 switch size
                 {
-                    case 1: handle_number(ctx, x, u8)
-                    case 2: handle_number(ctx, x, u16)
-                    case 4: handle_number(ctx, x, u32)
-                    case 8: handle_number(ctx, x, u64)
+                    case 1: handle_number(ctx, x, u8, notes)
+                    case 2: handle_number(ctx, x, u16, notes)
+                    case 4: handle_number(ctx, x, u32, notes)
+                    case 8: handle_number(ctx, x, u64, notes)
                     case: panic("Crazy integer size!")
                 }
             }
@@ -148,7 +189,7 @@ mu_flags :: proc(mu_ctx: ^mu.Context, flags: bit_set[$T]) -> bit_set[T]
 {
     flags := flags
 
-    type_info := peel_named(type_info_of(T))
+    type_info := runtime.type_info_base(type_info_of(T))
     if enum_info, ok := type_info.variant.(runtime.Type_Info_Enum); ok
     {
         for _, i in enum_info.names
